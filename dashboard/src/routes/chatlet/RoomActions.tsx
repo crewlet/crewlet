@@ -97,7 +97,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
     ? { kind: detail.data.channel.kind, member, unit: detail.data.channel.unit }
     : null;
   const members = detail.data?.members ?? [];
-  const unread = summary ? unreadIn(summary, frame.measured) : false;
+  const unread = summary ? unreadIn(summary, frame.waiting) : false;
   const membersOpen =
     nav.pane?.kind === "details" && nav.pane.room === id && nav.pane.tab === "members";
 

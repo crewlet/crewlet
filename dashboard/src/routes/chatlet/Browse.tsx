@@ -71,7 +71,7 @@ import { useChatNav } from "./nav.tsx";
 import { coverageOf } from "./page.ts";
 import { roomMark } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
-import { StartNote } from "./StartNote.tsx";
+import { StartNote, useSayPending } from "./StartNote.tsx";
 import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
 import { ago } from "~/lib/ago.ts";
 
@@ -317,8 +317,8 @@ function roomNote(room: ChatDirectoryRoom): string {
 
 /**
  * Join, where the engine would take one, or Open. A join that lands takes the
- * reader into the room, which is its confirmation; anything else is reported
- * under the row (`start.ts`).
+ * reader into the room, which is its confirmation; a pending one is its toast,
+ * and anything else is reported under the row (`start.ts`).
  */
 function BrowseAction({
   room,
@@ -329,6 +329,7 @@ function BrowseAction({
 }) {
   const nav = useChatNav();
   const join = useAct("join_channel");
+  const say = useSayPending();
   const { channel } = room;
   const archived = !!channel.archived_at;
   const joinable =
@@ -348,7 +349,7 @@ function BrowseAction({
       nav.openRoom(answer.go);
       return;
     }
-    onReport(answer);
+    onReport(say(answer));
   }
 
   return joinable ? (
@@ -377,6 +378,7 @@ export function BrowseRow({ room }: { room: ChatDirectoryRoom }) {
   const now = useNow();
   const join = useAct("join_channel");
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   const { channel } = room;
   const member = !!room.member;
   const standing = { kind: channel.kind, member, unit: channel.unit };
@@ -388,7 +390,7 @@ export function BrowseRow({ room }: { room: ChatDirectoryRoom }) {
     if (!pressable(join)) return;
     setReport(null);
     // QUIET: a join that landed takes the reader to the room, which is its
-    // confirmation; anything else is this row's own note (`start.ts`).
+    // confirmation; a pending one is its toast, anything else this row's note.
     const result = await join.run(
       { channel: channel.id },
       { done: "Joined the room", quiet: true },
@@ -399,7 +401,7 @@ export function BrowseRow({ room }: { room: ChatDirectoryRoom }) {
       nav.openRoom(answer.go);
       return;
     }
-    setReport(answer);
+    setReport(say(answer));
   }
 
   const href = nav.hrefOf({ kind: "room", id: channel.id });

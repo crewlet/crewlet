@@ -235,15 +235,15 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       inbox.waiting !== null && inbox.waiting > 0
         ? { badge: { value: inboxFigure(inbox), label: "waiting on you" } }
         : {},
-    // WHAT WAITS ON THE READER IN CHATLET: the unread messages that name
-    // them, and every unread direct message, in the rooms they have not muted
-    // (`lib/chatRooms.ts`). A badge, because each of them is addressed to the
+    // WHAT WAITS ON THE READER IN CHATLET: unread direct messages, messages
+    // naming them and replies in threads they follow, in rooms they have not
+    // muted (`lib/chatRooms.ts`). A badge, because each is addressed to the
     // reader; none where the counts were not measured or nothing waits.
     chatlet: chat
       ? {
           badge: {
             value: attentionFigure(chat),
-            label: "unread mentions and direct messages",
+            label: "unread direct messages, mentions and thread replies",
           },
         }
       : {},

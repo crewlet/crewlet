@@ -2222,6 +2222,77 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 	})
 }
 
+// TakeReceipt records on handle's receipt for a message that the seat's
+// running turn took it, as as ([OpTake]): the engine's record, said as the
+// engine alone ([AuthorSystem]). It wakes nobody and answers nothing. A receipt
+// already answered or taken writes nothing; a message gone, or one that keeps
+// the seat no receipt, is [ErrNotFound]: nothing on it could say so.
+func (s *Store) TakeReceipt(ctx context.Context, actor Actor, channelID, messageID, handle string,
+	as Taken) (Written, error) {
+
+	if err := actor.seatedOrSystem(); err != nil {
+		return Written{}, err
+	}
+	if actor.Kind != AuthorSystem {
+		return Written{}, fmt.Errorf("%w: a receipt's take is the engine's record of what a seat's "+
+			"running turn did, and %s is not the engine", ErrForbidden, actor.Name())
+	}
+	payload := ReceiptTake{V: DocumentVersion, MessageID: messageID, Handle: strings.TrimSpace(handle), As: as}
+	if err := payload.Validate(); err != nil {
+		return Written{}, err
+	}
+	opID, opErr := s.operation(actor, "take", messageID, takeAsk{Channel: channelID, Handle: payload.Handle, As: as})
+	if opErr != nil {
+		return Written{}, opErr
+	}
+	at := s.now()
+	subject := MessageSubject(channelID)
+	scope := ScopeSet{Subject: true}
+	var out Channel
+	result, err := s.publish(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternSequenced,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			room, _, err := readRoomTx(ctx, tx, channelID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			out = room
+			held, err := readMessageTx(ctx, tx, room.ID, messageID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if notSaid := isEvent(held, "receipt"); notSaid != nil {
+				return statelog.Decision{}, notSaid
+			}
+			var answer, taken string
+			err = tx.QueryRowContext(ctx, `SELECT answer_id, taken FROM chat_receipts
+				WHERE message_id = ? AND handle = ?`, messageID, payload.Handle).Scan(&answer, &taken)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				return statelog.Decision{}, fmt.Errorf("%w: the message keeps %s no receipt", ErrNotFound,
+					payload.Handle)
+			case err != nil:
+				return statelog.Decision{}, fmt.Errorf("chatlet: read %s's receipt for message %s: %w",
+					payload.Handle, messageID, err)
+			case answer != "" || taken != "":
+				// ALREADY ON THE MESSAGE: an answer, or the first take, stands.
+				return statelog.Decision{}, nil
+			}
+			return decide(stamp, actor, subject, OpTake, scope, opID, payload, nil, at)
+		},
+	})
+	if err != nil {
+		return Written{}, err
+	}
+	return s.decided(ctx, OpTake, channelID, "", Written{
+		Channel: out, Revision: writtenRevision(result, 0), ChangeID: opID,
+		Outcome: result,
+	})
+}
+
 // decided is a message gesture's answer once the applier has decided its
 // record: [Store.answer]'s where it landed, the domain's refusal where not.
 // A message record is SEQUENCED ([statelog.PatternSequenced]): the applier

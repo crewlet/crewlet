@@ -17,6 +17,12 @@
   - `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`
   - `internal/engine.TestTheRequestersWakeAboutWhatTheRunWroteJoinsAndAnyoneElsesIsTriaged`
   - `internal/engine.TestAWakeAboutARecordTheRunWroteReachesTheRunningRun`
+  - `internal/engine.TestTheSameWordsFromAnotherConversationAreNeverAbsorbed`
+  - `internal/engine.TestAPersonsMessageTakenByARunningTurnSaysSoOnItsReceipt`
+  - `internal/engine.TestOnlyNoiseFromTheRunsOwnConversationThatCanSaySoIsAbsorbable`
+  - `internal/engine.TestASameThreadDuplicateStillJoinsTheRunningRun`
+  - `internal/agent/prompts.TestATriageIsToldWhereTheMessageWasWrittenAgainstTheTask`
+  - `internal/chatlet.TestAReceiptSaysARunningTurnTookItsMessage`
 - **Cost-when-tried:** under ADR-0167 alone a colleague's fact about a running run's work ("the customer is on the EU region"), a lead's "stop, roll back" in chat and a "thanks!" in the run's room all waited for the run to end: the run worked on without the fact or the correction, and each message then started a turn of its own over a finished result, the thanks included.
 - **Tag-status:** unreleased
 
@@ -53,3 +59,7 @@ person whose wake waits is told why, once per wake and reason, on the conversati
 ## Amendment: a wake about a record the run wrote is a candidate
 
 A wake about a record the run created or wrote (ADR-0167's amendment, the same exact identity) is a candidate whoever wrote it, beside one in the run's conversation, about its item or a lead's, and the triage's message says so in the engine's line before the wake's fence. The gate is unchanged: such a wake's input joins as information, another writer's request is put as a fold-in (the amendment above), and noise is absorbed only owing nothing.
+
+## Amendment: a person's message is never dropped unseen
+
+**Noise is absorbed only from the run's own conversation.** A wake from another thread or room waits for a turn of its own whatever its words, since the run answers nothing there; the triage is told where the wake was written against the run's conversation (here, elsewhere in its room, or elsewhere), and that the same words there ask for that conversation's work. **A person's message to the seat** (one it owes an answer, or a reply in a thread it follows) **is absorbed only once its message says so**: the engine records the take on its Chatlet receipt first (`chatlet.OpTake`), and a wake whose receipt cannot say it, a vendor's chat's included, waits. **Every take of a person's Chatlet message by a running turn** (a wake read, a lead's note, an approved fold-in, an absorption) is recorded on that receipt, `joined` or `absorbed`, which its sender reads on the message; an answer still lands over it.

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -189,7 +190,7 @@ func (e *Engine) fileFoldIn(ctx context.Context, handle string, run sandbox.Pend
 					"not record its message worked: that message also runs as a turn of its own")
 		}
 		e.runSteers.seeThrough(ctx, handle, w)
-		e.runSteers.handOver(ctx, handle, w)
+		e.runSteers.handOver(ctx, handle, run.TurnID, chatlet.TakenJoined, w)
 		memo.mark(run.LaunchID, w.ID)
 		memo.settle(run.LaunchID, w.ID)
 		e.noteRouted(ctx, handle, run, w.ID, routeJoined, rule, "", nil)

@@ -630,6 +630,7 @@ func TestEveryOpRidesASubjectAndTheCreateHasTwoAnswers(t *testing.T) {
 		chatlet.OpEdit:       chatlet.KindMessage,
 		chatlet.OpDelete:     chatlet.KindMessage,
 		chatlet.OpReact:      chatlet.KindMessage,
+		chatlet.OpTake:       chatlet.KindMessage,
 		chatlet.OpEviction:   chatlet.KindEviction,
 		chatlet.OpGeneration: chatlet.KindGeneration,
 		chatlet.OpBarrier:    chatlet.KindBarrier,

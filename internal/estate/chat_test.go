@@ -319,6 +319,11 @@ func (d *chatDesk) Unreact(_ context.Context, actor chatlet.Actor, _, _, emoji s
 	return d.wrote("unreact:"+emoji, actor, "")
 }
 
+func (d *chatDesk) TakeReceipt(_ context.Context, actor chatlet.Actor, _, _, handle string,
+	as chatlet.Taken) (chatlet.Written, error) {
+	return d.wrote("take:"+handle+":"+string(as), actor, "")
+}
+
 func (d *chatDesk) SetRetention(_ context.Context, actor chatlet.Actor, _ string,
 	days *int) (chatlet.Written, error) {
 	rendered := "the company's"

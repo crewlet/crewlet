@@ -9,6 +9,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToastProvider } from "@crewlethq/ui";
 
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -18,6 +19,8 @@ import type { InsightsAnswer } from "~/protocol/insights.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { settled } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { toastText } from "~/testing.tsx";
+import { APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import { Insights } from "./Insights.tsx";
 
 const save = vi.hoisted(() => vi.fn());
@@ -83,9 +86,11 @@ async function mount(answer: InsightsAnswer) {
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
         <ViewerProvider>
-          <Router>
-            <Insights />
-          </Router>
+          <ToastProvider>
+            <Router>
+              <Insights />
+            </Router>
+          </ToastProvider>
         </ViewerProvider>
       </SessionReading>
     </ClientContext.Provider>,
@@ -132,7 +137,10 @@ test("choosing to review accepts this build's catalogue, on the revision just re
   const [patch, etag] = save.mock.calls[0] as unknown[];
   expect(patch).toEqual({ diagnostics: { insights: { share: "review", accepted: 1 } } });
   expect(etag).toBe('"rev"');
-  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+  // CONFIRMED BY ITS TOAST, watched until this node applies it; no line on the card.
+  expect(toastText()).toContain("Set usage insights to review each record first");
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(screen.queryByText(/Saved, applying/)).toBeNull();
 });
 
 test("a choice the engine refuses saves nothing, and the list goes back to what it holds", async () => {

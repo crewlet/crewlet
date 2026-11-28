@@ -22,7 +22,6 @@ import {
   SegmentedControl,
   Skeleton,
   Stack,
-  Text,
   Textarea,
 } from "@crewlethq/ui";
 import { BuildingComplexGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
@@ -36,7 +35,6 @@ import {
 } from "~/app/assistant/draft.ts";
 import { QueryState } from "~/components/common.tsx";
 import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
-import type { SettingWrite } from "~/lib/useSettingWrite.ts";
 import { href } from "~/app/router.tsx";
 import {
   ASSISTANT_INSTRUCTIONS_MAX_RUNES,
@@ -208,6 +206,10 @@ function CompanyCard({
   const write = useSettingWrite({
     reread: "Reload to see the company's instructions as they are now.",
     onApplied,
+    said: {
+      done: "Saved the company's instructions",
+      applied: "Ask Crewlet follows them from the next question.",
+    },
   });
   const header = (
     <Card.Header
@@ -239,7 +241,7 @@ function CompanyCard({
       setDraft={setDraft}
       busy={write.busy || applying}
       disabledReason={access.can ? undefined : access.reason}
-      status={<CompanyStatus write={write} onReload={onApplied} />}
+      status={<SettingWriteStatus write={write} onReload={onApplied} />}
       onSave={(next) => write.submit(companyInstructionsPlan(layer, next))}
       onEdit={() => {
         if (write.state.kind !== "idle" && !write.busy) write.reset();
@@ -247,6 +249,9 @@ function CompanyCard({
     />
   );
 }
+
+/** What a saved layer of the reader's own does, said in its save's toast. */
+const FOLLOWS_YOURS = "Ask Crewlet follows them from your next question.";
 
 /** The reader's own layer, saved under their seat. */
 function PersonCard({
@@ -263,7 +268,6 @@ function PersonCard({
   setDraft: DraftSetter<InstructionsDraft>;
 }) {
   const act = useAct("save_assistant_instructions");
-  const [said, setSaid] = useState<string | null>(null);
   const header = (
     <Card.Header
       icon={<UserGlyph size="sm" />}
@@ -299,41 +303,21 @@ function PersonCard({
           <Callout variant="danger" title="Nothing was saved">
             {act.refusal.sentence}
           </Callout>
-        ) : said ? (
-          <Text as="p" variant="caption" tone="secondary" role="status">
-            {said}
-          </Text>
         ) : null
       }
       onEdit={() => {
-        setSaid(null);
         if (act.refusal) act.dismiss();
       }}
       onSave={(next) => {
-        void act
-          .run(
-            { instructions: next, if_match: revision },
-            { done: "Your instructions saved", quiet: true },
-          )
-          .then((result) => {
-            if (result?.kind === "applied" || result?.kind === "pending") {
-              setSaid("Saved. Ask Crewlet follows them from your next question.");
-            }
-          });
+        void act.run(
+          { instructions: next, if_match: revision },
+          {
+            done: "Saved your instructions",
+            landed: (_, pending) => (pending ? undefined : FOLLOWS_YOURS),
+          },
+        );
       }}
     />
-  );
-}
-
-/** What the company layer's save came to, and once saved, when it applies. */
-function CompanyStatus({ write, onReload }: { write: SettingWrite; onReload: () => void }) {
-  if (write.state.kind !== "saved") return <SettingWriteStatus write={write} onReload={onReload} />;
-  return (
-    <Text as="p" variant="caption" tone="secondary" role="status">
-      {write.state.standing === "applying"
-        ? "Saved. Applying it on this node…"
-        : "Saved. Ask Crewlet follows them from the next question."}
-    </Text>
   );
 }
 

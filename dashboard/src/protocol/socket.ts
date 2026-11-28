@@ -1298,7 +1298,7 @@ export class LiveSocket {
       case "artifact_presence":
         this.roomPush("presence", msg.data);
         break;
-      // THE CHAT ARM. Six kinds, ONE store method: the frame carries the
+      // THE CHAT ARM. Seven kinds, ONE store method: the frame carries the
       // record's own `op` (`post`, `edit`, `react`, …) and the kind is a
       // routing label the server derived from it, so passing the kind as well
       // would be a second vocabulary for one fact — and the two would
@@ -1314,6 +1314,7 @@ export class LiveSocket {
       case "chat_edited":
       case "chat_deleted":
       case "chat_reacted":
+      case "chat_taken":
       case "chat_room_changed":
       case "chat_membership_changed":
         this.store.applyChatChange(msg.data as never);

@@ -48,7 +48,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ChatChannelSummary, ChatChannelsAnswer, ChatKind } from "~/protocol/index.ts";
+import type { ChatChannelsAnswer, ChatKind } from "~/protocol/index.ts";
 import { LIVE_REFETCH_MS, useChatActivity, useChatRead, useCoalesced } from "./chatLive.ts";
 import { useServicesAsk } from "./services.ts";
 import { useClient } from "./store-hooks.ts";
@@ -87,48 +87,66 @@ export function badgesAreMeasured(answer: { read_state?: boolean } | null | unde
 }
 
 /**
- * What waits on the reader in ONE room, as every badge that counts it says:
- * in a named room, the unread messages that name them or the whole room; in a
- * direct conversation, every unread message, since each of them is addressed
- * to the reader; in a muted room, nothing, which is what muting it asked for.
+ * What waits on the reader, place by place, as EVERY badge in the frame counts
+ * it: the sidebar's Chatlet row, Menu, each room's row and each thread's line.
  *
- * ONE RULE for the sidebar's Chatlet badge ([chatAttention]) and every row
- * and switcher in Chatlet that badges a room, so no two can count a room
- * differently. Whether the counts were measured at all is the caller's to ask
- * ([badgesAreMeasured]), of the answer the row came from.
+ * THE ENGINE'S ONE COUNT (`chat_channels`' `waiting`), the same rows Activity
+ * marks unread: a direct conversation's unread posts, a message naming the
+ * reader or the room, and a reply in a thread they follow, each once, in rooms
+ * they have not muted. Counted there so no two badges can differ; whether it
+ * was measured at all is [badgesAreMeasured]'s.
  */
-export function roomWaiting(row: ChatChannelSummary): number {
-  if (row.muted) return 0;
-  return isDirect(row.channel.kind) ? row.unread : row.mentions;
+export interface ChatWaiting {
+  /** Everything that waits, summed. */
+  value: number;
+  /** A count stopped at the engine's bound, or rooms were left out: a floor. */
+  capped: boolean;
+  /** What waits in one room: its own posts and its threads' replies. */
+  inRoom(channelID: string): number;
+  /** Whether a room's count stopped at its window, so it is a floor. */
+  floorIn(channelID: string): boolean;
+  /** What waits in one thread, by its room and root message. */
+  inThread(channelID: string, rootID: string): number;
+}
+
+/** The index over an answer's places; null where the counts were not measured. */
+export function chatWaiting(answer: ChatChannelsAnswer | null | undefined): ChatWaiting | null {
+  if (!answer || !badgesAreMeasured(answer)) return null;
+  const rooms = new Map<string, number>();
+  const threads = new Map<string, number>();
+  const floors = new Set<string>();
+  let value = 0;
+  for (const place of answer.waiting) {
+    if (place.count <= 0) continue;
+    value += place.count;
+    if (place.capped) floors.add(place.channel_id);
+    rooms.set(place.channel_id, (rooms.get(place.channel_id) ?? 0) + place.count);
+    if (place.root_id) threads.set(`${place.channel_id} ${place.root_id}`, place.count);
+  }
+  return {
+    value,
+    capped: answer.waiting_capped || answer.truncated === true,
+    inRoom: (channelID) => rooms.get(channelID) ?? 0,
+    floorIn: (channelID) => floors.has(channelID),
+    inThread: (channelID, rootID) => threads.get(`${channelID} ${rootID}`) ?? 0,
+  };
 }
 
 /** What waits on the reader in Chatlet, as the sidebar's badge says it. */
 export interface ChatAttention {
-  /** Unread messages naming the reader, plus unread direct messages. */
+  /** Unread direct messages, mentions and replies in threads they follow. */
   value: number;
   /** A count stopped at the engine's bound, or rooms were left out: a floor. */
   capped: boolean;
 }
 
-/**
- * What waits on the reader across their rooms, each counted by [roomWaiting].
- *
- * NULL WHERE THERE IS NO FIGURE TO DRAW: before the answer, on an answer whose
- * counts were not measured ([badgesAreMeasured]), and when nothing waits. A
- * floor where the engine said one: a room counted to its bound
- * (`unread_capped`), or a list cut short (`truncated`) that may hold more.
- */
+/** The sidebar's figure off [chatWaiting]; null where there is none to draw. */
 export function chatAttention(answer: ChatChannelsAnswer | null | undefined): ChatAttention | null {
-  if (!answer || !badgesAreMeasured(answer)) return null;
-  let value = 0;
-  let capped = answer.truncated === true;
-  for (const row of answer.channels) {
-    const waiting = roomWaiting(row);
-    if (waiting <= 0) continue;
-    value += waiting;
-    if (row.unread_capped) capped = true;
-  }
-  return value > 0 ? { value, capped } : null;
+  return attentionOf(chatWaiting(answer));
+}
+
+function attentionOf(waiting: ChatWaiting | null): ChatAttention | null {
+  return waiting && waiting.value > 0 ? { value: waiting.value, capped: waiting.capped } : null;
 }
 
 /** The figure as a badge writes it: a floor carries a "+". */
@@ -219,16 +237,22 @@ export function useChatRooms(): Reading {
 }
 
 /**
- * What waits on the reader in Chatlet, off the frame's reading, for the
- * sidebar's badge; null where there is no figure ([chatAttention]).
+ * What waits on the reader, off the frame's reading WITHOUT claiming it: a
+ * badge is drawn wherever the reading is, at its own rate ([chatWaiting]).
  */
-export function useChatAttention(): ChatAttention | null {
+export function useChatWaiting(): ChatWaiting | null {
   const reading = useContext(ReadingContext);
   if (reading === null) {
     throw new Error(
-      "useChatAttention() outside a ChatRoomsProvider: the frame mounts one (FrameReadings, app/Shell.tsx)",
+      "useChatWaiting() outside a ChatRoomsProvider: the frame mounts one (FrameReadings, app/Shell.tsx)",
     );
   }
   const data = reading.data;
-  return useMemo(() => chatAttention(data), [data]);
+  return useMemo(() => chatWaiting(data), [data]);
+}
+
+/** The sidebar's figure off the frame's reading ([chatAttention]). */
+export function useChatAttention(): ChatAttention | null {
+  const waiting = useChatWaiting();
+  return useMemo(() => attentionOf(waiting), [waiting]);
 }

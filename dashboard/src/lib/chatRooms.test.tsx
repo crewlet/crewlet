@@ -2,9 +2,9 @@
  * The reader's rooms are read once for the frame, and what waits on them in
  * Chatlet is counted from that one answer.
  *
- * THE CLAIMS: the badge counts what is addressed to the reader (a mention in
- * a named room, every unread message in a direct conversation) in the rooms
- * they have not muted, says a floor where the engine did, and draws nothing
+ * THE CLAIMS: the badge counts every place the engine says waits on the
+ * reader (a direct message, a mention, a reply in a thread they follow), each
+ * room and thread its own share, says a floor where the engine did, and draws nothing
  * where the counts were not measured; the badge and a surface that draws the
  * rooms share ONE read; the badge alone is asked only of a reader the company
  * serves Chatlet to, while a surface that draws the rooms is asked on its own
@@ -26,7 +26,7 @@ import {
   attentionFigure,
   badgesAreMeasured,
   chatAttention,
-  roomWaiting,
+  chatWaiting,
   useChatAttention,
   useChatRooms,
 } from "./chatRooms.ts";
@@ -40,7 +40,6 @@ function row(id: string, kind: string, counts: Partial<Row> = {}): Row {
     channel: { v: 1, id, kind, name: kind === "dm" ? "" : id, created_at: "2026-01-01T00:00:00Z" },
     revision: 1,
     unread: 0,
-    mentions: 0,
     ...counts,
   } as Row;
 }
@@ -51,6 +50,8 @@ function answer(channels: Row[], over: Partial<ChatChannelsAnswer> = {}): ChatCh
     complete: true,
     position,
     read_state: true,
+    waiting: [],
+    waiting_capped: false,
     channels,
     ...over,
   } as ChatChannelsAnswer;
@@ -62,50 +63,55 @@ afterEach(() => {
 });
 
 describe("what waits on the reader", () => {
-  test("is the mentions in named rooms and every unread direct message, muted rooms aside", () => {
-    const counted = chatAttention(
-      answer([
-        row("general", "public", { unread: 12, mentions: 2 }),
-        row("launch", "private", { unread: 4, mentions: 0 }),
-        row("ada-bo", "dm", { unread: 3, mentions: 0 }),
-        row("trio", "group", { unread: 1, mentions: 1 }),
-        row("noisy", "public", { unread: 40, mentions: 5, muted: true }),
-        row("hushed", "dm", { unread: 2, muted: true }),
-      ]),
-    );
-    expect(counted).toEqual({ value: 6, capped: false });
-    expect(attentionFigure(counted!)).toBe("6");
+  // THE ENGINE'S PLACES (`waiting`): a direct message, mentions in a named room,
+  // and replies in threads the reader started, replied in or follows, the
+  // reply naming them counted once, muted rooms left out by the engine.
+  const places = [
+    { channel_id: "ada-bo", root_id: "", count: 1, capped: false },
+    { channel_id: "general", root_id: "", count: 2, capped: false },
+    { channel_id: "general", root_id: "started", count: 3, capped: false },
+    { channel_id: "general", root_id: "replied", count: 1, capped: false },
+    { channel_id: "launch", root_id: "followed", count: 1, capped: false },
+  ];
+  const rooms = [
+    row("ada-bo", "dm", { unread: 1 }),
+    row("general", "public", { unread: 12 }),
+    row("launch", "public", { unread: 0 }),
+    row("noisy", "public", { unread: 40, muted: true }),
+  ];
+
+  test("is every place the engine counts, a thread's replies included", () => {
+    const counted = chatAttention(answer(rooms, { waiting: places }));
+    expect(counted).toEqual({ value: 8, capped: false });
+    expect(attentionFigure(counted!)).toBe("8");
   });
 
-  test("in one room is its mentions, a direct conversation's every unread message, and nothing muted", () => {
-    expect(roomWaiting(row("general", "public", { unread: 12, mentions: 2 }))).toBe(2);
-    expect(roomWaiting(row("ada-bo", "dm", { unread: 3, mentions: 1 }))).toBe(3);
-    expect(roomWaiting(row("trio", "group", { unread: 4 }))).toBe(4);
-    expect(roomWaiting(row("noisy", "public", { unread: 40, mentions: 5, muted: true }))).toBe(0);
-    expect(roomWaiting(row("hushed", "dm", { unread: 2, muted: true }))).toBe(0);
+  test("in one room is its posts and its threads' replies, and in one thread its own", () => {
+    const waiting = chatWaiting(answer(rooms, { waiting: places }))!;
+    expect(waiting.inRoom("general")).toBe(6);
+    expect(waiting.inRoom("launch")).toBe(1);
+    expect(waiting.inRoom("ada-bo")).toBe(1);
+    expect(waiting.inRoom("noisy")).toBe(0);
+    expect(waiting.inThread("general", "started")).toBe(3);
+    expect(waiting.inThread("launch", "followed")).toBe(1);
+    expect(waiting.inThread("general", "followed")).toBe(0);
   });
 
-  test("is a floor where a counted room stopped at the engine's bound, or rooms were left out", () => {
-    const bounded = chatAttention(
-      answer([row("ada-bo", "dm", { unread: 100, unread_capped: true })]),
-    );
-    expect(bounded).toEqual({ value: 100, capped: true });
-    expect(attentionFigure(bounded!)).toBe("100+");
-    // A ROOM COUNTED TO ITS BOUND THAT HOLDS NOTHING FOR THE READER says
-    // nothing about what waits on them.
-    expect(
-      chatAttention(
-        answer([
-          row("general", "public", { unread: 100, unread_capped: true, mentions: 0 }),
-          row("launch", "public", { unread: 1, mentions: 1 }),
-        ]),
-      ),
-    ).toEqual({ value: 1, capped: false });
-    expect(
-      chatAttention(
-        answer([row("launch", "public", { unread: 1, mentions: 1 })], { truncated: true }),
-      ),
-    ).toEqual({ value: 1, capped: true });
+  test("in a room is a floor where the engine's count of the room stopped at its window", () => {
+    const floored = places.map((p) => (p.channel_id === "launch" ? { ...p, capped: true } : p));
+    const waiting = chatWaiting(answer(rooms, { waiting: floored }))!;
+    expect(waiting.floorIn("launch")).toBe(true);
+    expect(waiting.floorIn("general")).toBe(false);
+  });
+
+  test("is a floor where the engine counted to its bound, or rooms were left out", () => {
+    const bounded = chatAttention(answer(rooms, { waiting: places, waiting_capped: true }));
+    expect(bounded).toEqual({ value: 8, capped: true });
+    expect(attentionFigure(bounded!)).toBe("8+");
+    expect(chatAttention(answer(rooms, { waiting: places, truncated: true }))).toEqual({
+      value: 8,
+      capped: true,
+    });
   });
 
   // A COUNT WITH NO READ STATE BEHIND IT IS NOT A ZERO, and not a figure.
@@ -113,12 +119,14 @@ describe("what waits on the reader", () => {
     expect(chatAttention(null)).toBeNull();
     expect(
       chatAttention(
-        answer([row("ada-bo", "dm", { unread: 3 })], {
-          read_state: false,
-        } as Partial<ChatChannelsAnswer>),
+        answer(rooms, { waiting: places, read_state: false } as Partial<ChatChannelsAnswer>),
       ),
     ).toBeNull();
-    expect(chatAttention(answer([row("general", "public", { unread: 9 })]))).toBeNull();
+    expect(
+      chatWaiting(answer(rooms, { read_state: false } as Partial<ChatChannelsAnswer>)),
+    ).toBeNull();
+    expect(chatAttention(answer(rooms))).toBeNull();
+    expect(chatWaiting(answer(rooms))?.inRoom("general")).toBe(0);
     expect(badgesAreMeasured({ read_state: true })).toBe(true);
     expect(badgesAreMeasured({ read_state: false })).toBe(false);
     expect(badgesAreMeasured(null)).toBe(false);
@@ -144,7 +152,12 @@ function mount(
   const mounted = mountChat(<ChatRoomsProvider>{children}</ChatRoomsProvider>, {
     viewer,
     services: NATIVE_SERVICES,
-    answer: async (what) => (what === "chat_channels" ? answer(rows) : {}),
+    answer: async (what) =>
+      what === "chat_channels"
+        ? answer(rows, {
+            waiting: [{ channel_id: "ada-bo", root_id: "", count: 2, capped: false }],
+          })
+        : {},
   });
   const asked = () => mounted.socket.query.mock.calls.filter(([what]) => what === "chat_channels");
   return { ...mounted, asked };

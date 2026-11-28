@@ -33,7 +33,6 @@ const GENERAL = {
   },
   revision: 1,
   unread: 0,
-  mentions: 0,
 };
 
 /** The screen at `hash`, its reader in one public room. */
@@ -44,7 +43,13 @@ function mountAt(hash: string) {
     answer: async (what) => {
       switch (what) {
         case "chat_channels":
-          return { ...SERVED, read_state: true, channels: [GENERAL] };
+          return {
+            ...SERVED,
+            read_state: true,
+            waiting: [],
+            waiting_capped: false,
+            channels: [GENERAL],
+          };
         case "chat_activity":
           return { ...SERVED, items: [], unread: { mention: 0, reply: 0 }, read_state: true };
         case "chat_rooms":

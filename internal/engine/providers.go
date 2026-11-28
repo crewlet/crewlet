@@ -359,14 +359,15 @@
 // (ADR-0167).
 //
 // A wake that rule leaves about the run's work, or a lead's ([candidate]), is
-// described once per job by one call on the role's `triage` chain
-// ([runTriage]) and the engine gates the description ([gateOf]): input joins
-// as information, a lead's steer as their note ([Engine.fileSteer]), noise
-// owing nothing is absorbed, the rest waits (ADR-0168). Another writer's
-// request is put to the run's requester and the seat's leads as a fold-in on
-// the run's row ([Engine.askFoldIn]); approved, it joins as the approver's
-// note ([Engine.fileFoldIn]), else it waits (ADR-0109). A waiting person is
-// told why, once ([Engine.tellWaiting]). Runs see each other (ADR-0176).
+// described once a job by one call on the role's `triage` chain
+// ([runTriage]) and the engine gates it ([gateOf]): input joins as
+// information, a lead's steer as a note ([Engine.fileSteer]), noise only
+// where [absorbable], the rest waits; takes are on receipts (ADR-0168).
+// Another writer's request is put to the run's requester and the seat's leads
+// as a fold-in on the run's row ([Engine.askFoldIn]); approved, it joins as
+// the approver's note ([Engine.fileFoldIn]), else it waits (ADR-0109). A
+// waiting person is told why once ([Engine.tellWaiting]). Runs see each
+// other (ADR-0176).
 package engine
 
 import (

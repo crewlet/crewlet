@@ -8,6 +8,7 @@ import { useToast } from "@crewlethq/ui";
 
 import { usePeek } from "~/app/frame/peekAddress.ts";
 import { useKeymap } from "~/app/keymap.ts";
+import type { ChatWaiting } from "~/lib/chatRooms.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import { openRoomOf, type ChatFrame, type ChatNav } from "./nav.tsx";
@@ -26,12 +27,12 @@ export function stepRoom(
   rooms: readonly ChatChannelSummary[],
   current: string,
   step: -1 | 1,
-  opts: { unread: boolean; measured: boolean },
+  opts: { unread: boolean; waiting: ChatWaiting | null },
 ): string | null {
   const list = rooms.filter(
     (room) =>
       !room.channel.archived_at &&
-      (!opts.unread || unreadIn(room, opts.measured) || room.channel.id === current),
+      (!opts.unread || unreadIn(room, opts.waiting) || room.channel.id === current),
   );
   if (list.length === 0) return null;
   const at = list.findIndex((room) => room.channel.id === current);
@@ -43,13 +44,17 @@ export function stepRoom(
 }
 
 /**
- * Whether marking `room` read has anything to mark: unread posts, muted or
- * not. A room the rail does not list has no cursor here, and an unmeasured
- * zero says nothing, so that room may still hold some.
+ * Whether marking `room` read has anything to mark: unread posts or replies
+ * waiting there, muted or not. A room the rail does not list has no cursor
+ * here, and an unmeasured zero (`waiting` null) says nothing, so that room
+ * may still hold some.
  */
-export function markable(room: ChatChannelSummary | undefined, measured: boolean): boolean {
+export function markable(
+  room: ChatChannelSummary | undefined,
+  waiting: ChatWaiting | null,
+): boolean {
   if (!room) return false;
-  return !measured || room.unread > 0;
+  return waiting === null || room.unread > 0 || waiting.inRoom(room.channel.id) > 0;
 }
 
 /** The one toast a mark by key says, which a repeat replaces rather than stacks under. */
@@ -63,7 +68,7 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
   const room = openRoomOf(nav.place);
   const toMark = markable(
     frame.channels.find((summary) => summary.channel.id === room),
-    frame.measured,
+    frame.waiting,
   );
   const step = (unread: boolean) => (e: KeyboardEvent) => {
     // IN THE PANEL'S ORDER, section by section, so the next room is the row
@@ -71,7 +76,7 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
     const listed = sectionRooms(frame.channels, {
       options: frame.list,
       starred: frame.starred,
-      measured: frame.measured,
+      waiting: frame.waiting,
       current: room,
       titleOf: (summary) =>
         roomTitle(summary.channel, {
@@ -82,7 +87,7 @@ export function useChatShortcuts(nav: ChatNav, frame: ChatFrame): void {
     }).flatMap((section) => section.rooms);
     const next = stepRoom(listed, room, e.key.toLowerCase() === "arrowup" ? -1 : 1, {
       unread,
-      measured: frame.measured,
+      waiting: frame.waiting,
     });
     if (next) nav.openRoom(next);
   };

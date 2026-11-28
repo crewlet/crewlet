@@ -8,6 +8,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToastProvider } from "@crewlethq/ui";
 
 import { Router } from "~/app/router.tsx";
 import type { IssueReportInert, IssueReportsAnswer } from "~/protocol/issueReports.ts";
@@ -18,6 +19,8 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { settled } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { toastText } from "~/testing.tsx";
+import { APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import { Diagnostics } from "./Diagnostics.tsx";
 
 const save = vi.hoisted(() => vi.fn());
@@ -89,9 +92,11 @@ async function mount(answer: IssueReportsAnswer) {
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
         <ViewerProvider>
-          <Router>
-            <Diagnostics />
-          </Router>
+          <ToastProvider>
+            <Router>
+              <Diagnostics />
+            </Router>
+          </ToastProvider>
         </ViewerProvider>
       </SessionReading>
     </ClientContext.Provider>,
@@ -154,8 +159,10 @@ test("turning it on writes the one setting, on the revision just read, with its 
   expect(etag).toBe('"rev"');
   expect(summary).toBe("Turned on bug reports to Crewlet");
   expect(theSwitch().checked).toBe(true);
-  // AND WATCHED until this node applies it.
-  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+  // CONFIRMED BY ITS TOAST, watched until this node applies it; no line on the card.
+  expect(toastText()).toContain("Turned on bug reports to Crewlet");
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(screen.queryByText(/Saved, applying/)).toBeNull();
 });
 
 // A WARNING THE CHANGE INTRODUCES STOPS THE SAVE, as it does for every other

@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -1298,6 +1299,19 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 	}, func() string {
 		return fmt.Sprintf("frames %v; the model saw %v", frames.kinds(t), n.model.seen())
 	})
+	// TAKEN, on the seat's receipt for the question, as the engine records a
+	// running turn's take of a person's message: the record its frame names.
+	rooms, ok := engine.OperatorChatWriter(n.engine)
+	if !ok {
+		t.Fatal("the node hands out no chat writer")
+	}
+	taker := chatlet.Actor{Handle: iam.EngineSessions, Kind: chatlet.AuthorSystem}
+	if _, err := rooms.TakeReceipt(t.Context(), taker, made.Channel, asked.MessageID, seat,
+		chatlet.TakenJoined); err != nil {
+		t.Fatalf("the seat's receipt for the question did not take: %v", err)
+	}
+	out.Changes = append(out.Changes, chatRecord{Op: chatlet.OpTake, MessageID: asked.MessageID,
+		Author: taker.Handle, AuthorKind: taker.Kind})
 	release()
 	var answered chatlet.MessageView
 	waitFor(t, "the seat's answer in the thread", func() bool {

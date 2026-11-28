@@ -719,10 +719,10 @@ func TestTheUnreadBadgeIsTheViewersOwnCursorsCountedToTheCap(t *testing.T) {
 
 	got := askChatJSON(t, chatSources(t, reader, nil, reads), "chat_channels", nil)
 
-	if !maps.Equal(reader.channels.Cursors, cursors) {
+	if !maps.Equal(reader.channels.Marks.Cursors, cursors) {
 		t.Errorf("the read was given cursors %v, want ana's own %v — without "+
 			"them every room reports its whole tail unread",
-			reader.channels.Cursors, cursors)
+			reader.channels.Marks.Cursors, cursors)
 	}
 	rooms, _ := got["channels"].([]any)
 	if len(rooms) != 1 {
@@ -819,6 +819,42 @@ func TestTheRailMarksTheRoomsThisViewerSilenced(t *testing.T) {
 	}
 	if _, stamped := read["absent_since"]; stamped {
 		t.Errorf("the rail carries the reconcile's absence stamp: %v", read)
+	}
+}
+
+// THE RAIL CARRIES WHAT WAITS ON THE READER, counted by the reader against the
+// whole record (mutes and thread places included) and handed on unchanged, so
+// every badge a screen draws from the rail is the engine's one count.
+//
+// Mutation: drop the mutes from the marks and the muted room is not muted for
+// the count; drop `waiting` from the answer and the sidebar has nothing to draw.
+func TestTheRailCarriesWhatWaitsOnTheReader(t *testing.T) {
+	t.Parallel()
+	reader := newStubChat()
+	reader.listing.Channels = []chatlet.ChannelSummary{{Channel: reader.rooms[cEng]}}
+	reader.listing.Waiting = []chatlet.Waiting{
+		{ChannelID: cEng, Count: 1}, {ChannelID: cEng, RootID: "root-1", Count: 2}}
+	reader.listing.WaitingCapped = true
+	reads := chatReadsFor(t, "ana", coord.ChatReadDelta{
+		Cursors: map[string]int64{cEng: 7}, Mute: []string{cOurs},
+		ThreadCursors: map[string]int64{coordtest.ChatID("root-1"): 9},
+	})
+
+	got := askChatJSON(t, chatSources(t, reader, nil, reads), "chat_channels", nil)
+
+	q := reader.channels
+	if !q.Waiting || !q.Marks.Known || !q.Marks.Muted[cOurs] ||
+		q.Marks.ThreadCursors[coordtest.ChatID("root-1")] != 9 {
+		t.Errorf("the rail asked %+v, want what waits counted against ana's whole record", q)
+	}
+	waiting, _ := got["waiting"].([]any)
+	if len(waiting) != 2 || got["waiting_capped"] != true {
+		t.Fatalf("the rail carried waiting %v (capped %v), want the reader's two places "+
+			"and its floor", got["waiting"], got["waiting_capped"])
+	}
+	thread, _ := waiting[1].(map[string]any)
+	if thread["root_id"] != "root-1" || thread["count"] != float64(2) {
+		t.Errorf("the thread's place is %v, want root-1 waiting 2", thread)
 	}
 }
 

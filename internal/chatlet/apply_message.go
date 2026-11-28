@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE TRANSCRIPT'S CASES: post, edit, delete, react, and the destroying erase and prune.
+// THE TRANSCRIPT'S CASES: post, edit, delete, react, take, and the destroying erase and prune.
 //
 // A message record is SEQUENCED ([statelog.PatternSequenced]) with no
 // expectation: arbitration would serialise the hottest subject in the company
@@ -28,7 +28,7 @@ import (
 
 // applyMessage writes one record on a room's message stream, and its verdict.
 //
-// FOUR OPS, AND THE SWITCH IS EXHAUSTIVE. The erase and the prune are NOT here
+// FIVE OPS, AND THE SWITCH IS EXHAUSTIVE. The erase and the prune are NOT here
 // — both destroy rows across a whole room, so both are published on the ROOM's
 // subject where they serialise against its own state, and both are reached
 // through [Applier.applyChannel].
@@ -58,6 +58,8 @@ func (a *Applier) applyMessage(ctx context.Context, tx *sql.Tx, at applyContext)
 			rows, verdict, err = a.applyDelete(ctx, tx, at, p)
 		case Reaction:
 			rows, verdict, err = a.applyReact(ctx, tx, at, p)
+		case ReceiptTake:
+			rows, verdict, err = a.applyTake(ctx, tx, at, p)
 		default:
 			return 0, fmt.Errorf("chatlet: the %s record at %s carries a %T, which is "+
 				"not a payload a room's message stream carries", at.record.Op,
@@ -476,6 +478,34 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	a.noteMessage(at, message)
 	return rows + int(gone) + unfollowed, VerdictApplied, nil
+}
+
+// applyTake marks a seat's open receipt for a message taken by its running
+// turn. The first take stands, and an answer stands over a take: either is
+// already what the sender reads. A receipt that is not there is left so.
+func (a *Applier) applyTake(ctx context.Context, tx *sql.Tx, at applyContext,
+	t ReceiptTake) (int, Verdict, error) {
+
+	message, found, err := readMessage(ctx, tx, t.MessageID)
+	if err != nil {
+		return 0, "", err
+	}
+	if !found {
+		return 0, VerdictGone, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE chat_receipts SET taken = ?, taken_at = ?
+		 WHERE message_id = ? AND handle = ? AND answer_id = '' AND taken = ''`,
+		string(t.As), store.EncodeTime(at.brokerAt), t.MessageID, t.Handle)
+	if err != nil {
+		return 0, "", fmt.Errorf("chatlet: mark %s's receipt for message %s taken at %s: %w",
+			t.Handle, t.MessageID, at.position, err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		a.noteMessage(at, message)
+	}
+	return int(n), VerdictApplied, nil
 }
 
 // applyReact adds or removes one reaction. It wakes nobody: a reaction carries

@@ -237,6 +237,8 @@ describe("the room's intro", () => {
     answers.chat_channels = {
       ...served,
       read_state: true,
+      waiting: [],
+      waiting_capped: false,
       channels: [{ channel: solo, revision: 3, unread: 0, participants: ["ada"] }],
     };
     mount();
@@ -1233,37 +1235,71 @@ function detailOf(over: Record<string, unknown>, member = true) {
   };
 }
 
-test("a reply the reader has read in this tab is not new on the thread line", async () => {
-  // WHAT THIS TAB HAS READ COUNTS AT ONCE: the engine's state learns of it only
-  // at the cursor writer's next flush, so the reader's own reply read "1 new"
-  // under the root until then. Mutation: count against the engine's state
-  // alone and the last expectation goes red.
-  const last = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 30 };
+/** A room post with a thread of `replies`, its newest at `seq`. */
+function threaded(seq: number, replies: number, last: number) {
+  return {
+    ...message(seq, { id: `m-${seq}` }),
+    thread: {
+      replies,
+      last_reply_at: "2026-01-01T00:02:00Z",
+      last_reply_position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: last },
+      repliers: ["bo"],
+      replier_count: 1,
+    },
+  };
+}
+
+test("a thread's line counts the replies waiting on the reader there, and no others", async () => {
+  // THE SIDEBAR'S COUNT FOR THE THREAD (`waiting`): m-5 is a thread the reader
+  // follows with two replies waiting; m-6 has newer replies nobody addressed
+  // to them. Mutation: draw any reply above the thread's place as new and
+  // m-6 says "1 new".
+  answers.chat_channels = {
+    ...served,
+    read_state: true,
+    waiting: [{ channel_id: "room-1", root_id: "m-5", count: 2, capped: false }],
+    waiting_capped: false,
+    channels: [],
+  };
   answers.chat_messages = {
     ...served,
     channel_id: "room-1",
-    messages: [
-      {
-        ...message(5, { id: "m-5" }),
-        thread: {
-          replies: 2,
-          last_reply_at: "2026-01-01T00:02:00Z",
-          last_reply_position: last,
-          repliers: ["ada"],
-          replier_count: 1,
-        },
-      },
-    ],
+    messages: [threaded(6, 3, 31), threaded(5, 4, 30)],
   };
+  mount();
+  await screen.findByText("4 replies");
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^4 replies, 2 new/ })).toBeTruthy(),
+  );
+  expect(screen.getByRole("button", { name: /^3 replies/ }).getAttribute("aria-label")).not.toMatch(
+    /new/,
+  );
+});
+
+test("a reply the reader has read in this tab is not new on the thread line", async () => {
+  // WHAT THIS TAB HAS READ COUNTS AT ONCE: the engine's state learns of it only
+  // at the cursor writer's next flush, so the reader's own reply read "2 new"
+  // under the root until then. Mutation: count against the engine's state
+  // alone and the last expectation goes red.
+  answers.chat_channels = {
+    ...served,
+    read_state: true,
+    waiting: [{ channel_id: "room-1", root_id: "m-5", count: 2, capped: false }],
+    waiting_capped: false,
+    channels: [],
+  };
+  answers.chat_messages = { ...served, channel_id: "room-1", messages: [threaded(5, 2, 30)] };
   const cursors = new ReadCursors({ flush: async () => undefined });
   mountChat(
     <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
     { answers, viewer: ADA },
   );
   await screen.findByText("2 replies");
-  expect(screen.getByText(/1 new/)).toBeTruthy();
-  act(() => cursors.seeThread("m-5", packPosition(last)));
-  await waitFor(() => expect(screen.queryByText(/1 new/)).toBeNull());
+  await waitFor(() => expect(screen.getByText(/2 new/)).toBeTruthy());
+  act(() =>
+    cursors.seeThread("m-5", packPosition({ stream: "CREWLET_CHAT_LOG", generation: 1, seq: 30 })),
+  );
+  await waitFor(() => expect(screen.queryByText(/2 new/)).toBeNull());
 });
 
 test("a reaction is sent as its shortcode and drawn as its glyph", async () => {

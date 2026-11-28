@@ -16,7 +16,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
-import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
+import { ADA, actEngine, applied, pending, type Pressed } from "~/test/chat.tsx";
+import { toastText } from "~/testing.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
 import { ChatDialogHost, SuggestedPerson, characters, foundingMembers } from "./Dialogs.tsx";
@@ -49,12 +50,13 @@ const detail = (extra: Record<string, unknown> = {}) => ({
 const rail = (fresh = false, extra: Record<string, unknown> = {}) => ({
   ...SERVED,
   read_state: true,
+  waiting: [],
+  waiting_capped: false,
   channels: [
     {
       channel: channel(extra),
       revision: 1,
       unread: 0,
-      mentions: 0,
       ...(fresh
         ? {}
         : {
@@ -337,6 +339,19 @@ describe("New room", () => {
       tool: "create_channel",
       args: { channel: "core", members: ["bo", { handle: "ops", follow_all: true }] },
     });
+  });
+
+  // DURABLE AND NOT HERE YET is said by its toast, as every pending write
+  // is, and the dialog closes: nothing in it is left to press. Mutation: draw
+  // the pending note in the dialog and keep it open, and this fails.
+  test("a room recorded but not yet applied here is said by a toast, and the dialog closes", async () => {
+    presses = actEngine((tool) => pending(tool, { channel: "room-new" }));
+    const { onClose } = open({ kind: "new-room" });
+    fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: "Launch" } });
+    fireEvent.click(screen.getByRole("button", { name: /create room/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(toastText()).toMatch(/not shown here yet/);
+    expect(screen.queryByText(/not shown here yet/, { selector: ".crewlet-callout *" })).toBeNull();
   });
 
   test("a founding member follows as the room's choice says, and a person always when named", () => {

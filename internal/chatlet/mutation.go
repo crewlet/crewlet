@@ -74,6 +74,11 @@ const (
 	// would let the later of two simultaneous reactors erase the earlier one.
 	OpReact OpKind = "react"
 
+	// OpTake records on a seat's receipt for a message that the seat's
+	// running turn took the message instead of a turn of its own
+	// ([ReceiptTake]). It wakes nobody.
+	OpTake OpKind = "take"
+
 	// OpErase REMOVES message rows permanently — an admin redacting what
 	// should never have been said. Only a person or a credential may publish
 	// one (see [MessageErase]), and it INSTALLS A GATE by its op rather
@@ -104,9 +109,9 @@ const (
 	OpTrimmed OpKind = "trimmed"
 )
 
-// OpKinds are the fourteen, in the order they are documented.
+// OpKinds are the fifteen, in the order they are documented.
 var OpKinds = []OpKind{
-	OpCreate, OpPatch, OpRetention, OpMembers, OpPost, OpEdit, OpDelete, OpReact,
+	OpCreate, OpPatch, OpRetention, OpMembers, OpPost, OpEdit, OpDelete, OpReact, OpTake,
 	OpErase, OpPrune, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
 }
 
@@ -132,6 +137,7 @@ var opRidesOn = map[OpKind]ObjectKind{
 	OpEdit:       KindMessage,
 	OpDelete:     KindMessage,
 	OpReact:      KindMessage,
+	OpTake:       KindMessage,
 	OpEviction:   KindEviction,
 	OpGeneration: KindGeneration,
 	OpBarrier:    KindBarrier,
@@ -836,6 +842,47 @@ func (r Reaction) Validate() error {
 	return nil
 }
 
+// ReceiptTake is what a seat's running turn did with a message whose receipt
+// the seat holds, in place of a turn of its own: the message's sender reads it
+// on the message. Its subject is the message's room.
+type ReceiptTake struct {
+	V int `json:"v"`
+
+	MessageID string `json:"message_id"`
+
+	// Handle is the seat whose receipt it is.
+	Handle string `json:"handle"`
+
+	// As is what the running turn did with the message.
+	As Taken `json:"as"`
+}
+
+// Taken is what a seat's running turn did with a message it took.
+type Taken string
+
+const (
+	// TakenJoined is a message the running work took in, to answer there.
+	TakenJoined Taken = "joined"
+	// TakenAbsorbed is a message the running work read, asking nothing.
+	TakenAbsorbed Taken = "absorbed"
+)
+
+// Valid reports whether t is one of the two.
+func (t Taken) Valid() bool { return t == TakenJoined || t == TakenAbsorbed }
+
+// Validate refuses a take this build will not write.
+func (r ReceiptTake) Validate() error {
+	switch {
+	case r.MessageID == "":
+		return invalid("message_id", "a take names no message")
+	case r.Handle == "":
+		return invalid("handle", "a take names no seat, and whose receipt it marks is what the row holds")
+	case !r.As.Valid():
+		return invalid("as", "a take is %q, not %q or %q", r.As, TakenJoined, TakenAbsorbed)
+	}
+	return nil
+}
+
 // Prune removes everything in a room older than a stated instant. Its subject
 // is the CHANNEL.
 //
@@ -972,6 +1019,8 @@ func DecodeMutation(rec MutationRecord) (Payload, error) {
 			return decodePayload[MessageDelete](rec)
 		case OpReact:
 			return decodePayload[Reaction](rec)
+		case OpTake:
+			return decodePayload[ReceiptTake](rec)
 		}
 	case KindEviction:
 		if rec.Op == OpEviction {

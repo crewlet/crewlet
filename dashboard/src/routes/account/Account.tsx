@@ -551,9 +551,6 @@ export function SecurityLine({
   );
 }
 
-/** What changing the password came to, while this browser stays signed in. */
-type Changed = { kind: "kept" } | { kind: "refused"; text: string };
-
 /**
  * Change your own password, in the dialog the Security card's "Change
  * password…" opens: the current one, a code where a second factor is held,
@@ -589,7 +586,7 @@ function ChangePasswordDialog({
   const [confirm, setConfirm] = useState("");
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<Changed | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   // THE ENGINE ASKED FOR A CODE: the field stays drawn whatever the list
   // said, because the engine is what decides whether one is held.
   const [asked, setAsked] = useState(false);
@@ -607,7 +604,7 @@ function ChangePasswordDialog({
     }
     const sent = needsCode ? code.trim() : "";
     setBusy(true);
-    setOutcome(null);
+    setRefused(null);
     try {
       const answer = await auth.changePassword({
         current_password: current,
@@ -632,8 +629,14 @@ function ChangePasswordDialog({
         goSignIn();
         return;
       }
-      setOutcome({ kind: "kept" });
+      // THIS BROWSER STAYS SIGNED IN: said as every save is, and the dialog closes.
+      toast.show({
+        variant: "success",
+        title: "Password changed",
+        message: "Signed out everywhere else.",
+      });
       onChanged();
+      onClose();
     } catch (err) {
       // A CODE IS SINGLE-USE, and one the engine refused is no use again:
       // cleared, as the step-up dialog clears it — and the form is not
@@ -641,14 +644,13 @@ function ChangePasswordDialog({
       // say it is missing under the refusal that emptied it.
       setCode("");
       setTried(false);
-      setOutcome({ kind: "refused", text: changeRefusal(err, sent !== "") });
+      setRefused(changeRefusal(err, sent !== ""));
       if (err instanceof RestError && err.code === "second_factor_required") setAsked(true);
     } finally {
       setBusy(false);
     }
   }
 
-  const kept = outcome?.kind === "kept";
   return (
     <Modal
       open
@@ -661,59 +663,37 @@ function ChangePasswordDialog({
       stackBody
       onSubmit={() => void submit()}
       footer={
-        kept ? (
-          <Button variant="primary" onClick={onClose}>
-            Done
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
           </Button>
-        ) : (
-          <>
-            <Button variant="ghost" onClick={onClose} disabled={busy}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={busy}>
-              {busy ? "Changing" : "Change password"}
-            </Button>
-          </>
-        )
+          <Button type="submit" variant="primary" disabled={busy}>
+            {busy ? "Changing" : "Change password"}
+          </Button>
+        </>
       }
     >
-      {kept ? (
-        <Callout variant="success" role="status">
-          Password changed. Signed out everywhere else.
+      {/* WHAT THE CHANGE DOES, said where it is made: the Security card's
+          line says what is true of the password now. */}
+      <Text as="p" variant="body" tone="secondary">
+        Changing it signs you out everywhere else and stops your tokens.
+      </Text>
+      <CurrentPassword value={current} onChange={setCurrent} missing={tried && current === ""} />
+      {needsCode && (
+        <SecondFactorCode value={code} onChange={setCode} missing={tried && code.trim() === ""} />
+      )}
+      <NewPasswordFields
+        floor={floor}
+        password={password}
+        confirm={confirm}
+        onPassword={setPassword}
+        onConfirm={setConfirm}
+        tried={tried}
+      />
+      {refused !== null && (
+        <Callout variant="danger" role="alert">
+          {refused}
         </Callout>
-      ) : (
-        <>
-          {/* WHAT THE CHANGE DOES, said where it is made: the Security card's
-              line says what is true of the password now. */}
-          <Text as="p" variant="body" tone="secondary">
-            Changing it signs you out everywhere else and stops your tokens.
-          </Text>
-          <CurrentPassword
-            value={current}
-            onChange={setCurrent}
-            missing={tried && current === ""}
-          />
-          {needsCode && (
-            <SecondFactorCode
-              value={code}
-              onChange={setCode}
-              missing={tried && code.trim() === ""}
-            />
-          )}
-          <NewPasswordFields
-            floor={floor}
-            password={password}
-            confirm={confirm}
-            onPassword={setPassword}
-            onConfirm={setConfirm}
-            tried={tried}
-          />
-          {outcome?.kind === "refused" && (
-            <Callout variant="danger" role="alert">
-              {outcome.text}
-            </Callout>
-          )}
-        </>
       )}
     </Modal>
   );
@@ -1082,7 +1062,7 @@ function RevokeToken({
         });
         if (!answer) return;
         onDone();
-        if (answer.kind === "done" && !answer.pending) onClose();
+        if (answer.kind === "done") onClose();
       }}
     >
       Anything using {token.label ? `“${token.label}”` : "it"} stops working.

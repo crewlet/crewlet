@@ -55,7 +55,13 @@ const at = (seq: number) => GENERATION_STRIDE + seq;
 const channel = { v: 1, id: "room-1", kind: "public", name: "general", created_at: "" };
 
 /** The rail, served at 10 and complete. */
-const rail = { ...served(10), read_state: true, channels: [{ channel, revision: 1, unread: 0 }] };
+const rail = {
+  ...served(10),
+  read_state: true,
+  waiting: [],
+  waiting_capped: false,
+  channels: [{ channel, revision: 1, unread: 0 }],
+};
 
 /** Every coverage the views published, the empty ones dropped. */
 const published = () =>

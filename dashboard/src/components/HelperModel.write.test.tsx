@@ -9,7 +9,8 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { SelectOption } from "@crewlethq/ui";
+import { ToastProvider, type SelectOption } from "@crewlethq/ui";
+import { toastText } from "~/testing.tsx";
 import { HelperModel } from "./HelperModel.tsx";
 
 const transport = vi.hoisted(() => ({
@@ -49,14 +50,16 @@ function mount() {
   const store = new Store();
   render(
     <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      <HelperModel
-        helper="assistant"
-        current="sonnet"
-        options={OPTIONS}
-        wordOf={(v) => v}
-        canAssign
-        onApplied={() => {}}
-      />
+      <ToastProvider>
+        <HelperModel
+          helper="assistant"
+          current="sonnet"
+          options={OPTIONS}
+          wordOf={(v) => v}
+          canAssign
+          onApplied={() => {}}
+        />
+      </ToastProvider>
     </ClientContext.Provider>,
   );
 }
@@ -71,7 +74,7 @@ async function choose(key: string) {
   });
 }
 
-test("the chosen model shows at once while it is saved, then the picker says where it runs now", async () => {
+test("the chosen model shows at once while it is saved, and its toast says where it runs now", async () => {
   mount();
   await choose("fast");
   // SAVING: the choice is drawn, never the old model, and the wait is said.
@@ -82,7 +85,7 @@ test("the chosen model shows at once while it is saved, then the picker says whe
   await act(async () => {
     transport.save?.({ kind: "saved", revisionId: "r2", epoch: 2 });
   });
-  expect(await screen.findByText(/Ask Crewlet now runs on fast/)).toBeDefined();
+  expect(toastText()).toContain("Ask Crewlet now runs on fast");
   expect(screen.getByRole("combobox", { name: "Ask Crewlet's model" }).textContent).toContain(
     "fast",
   );
@@ -96,5 +99,5 @@ test("a choice the engine refuses falls back to the stored model", async () => {
   expect(screen.getByRole("combobox", { name: "Ask Crewlet's model" }).textContent).toContain(
     "sonnet",
   );
-  expect(screen.queryByText(/now runs on/)).toBeNull();
+  expect(toastText()).not.toContain("now runs on");
 });

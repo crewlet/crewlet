@@ -45,7 +45,6 @@ import {
   returnFocus,
   SettingForm,
   Text,
-  useToast,
 } from "@crewlethq/ui";
 import { Modal } from "./Modal.tsx";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
@@ -67,6 +66,7 @@ import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
+import { REFUSED_HERE } from "~/components/SettingWriteStatus.tsx";
 import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
@@ -158,10 +158,10 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
 /**
  * One window's ceiling as a figure, and — for an admin — as a field.
  *
- * WHAT IT SHOWS AFTER A SAVE is the ceiling SAVED, marked as applying, until
- * this node has applied it and the answer the screen draws carries it. Going
- * back to the served figure at once drew the ceiling being replaced for a
- * beat after "Saved", which reads as a save that did not take.
+ * WHAT IT SHOWS AFTER A SAVE is the ceiling SAVED until this node has applied
+ * it and the answer the screen draws carries it; the save's toast says it is
+ * applying. Going back to the served figure at once drew the ceiling being
+ * replaced for a beat after the save, which reads as a save that did not take.
  *
  * UNLESS THIS NODE REFUSED IT. Then the figure is the served one again — the
  * ceiling the gate goes on enforcing — marked as refused here, rather than
@@ -371,13 +371,9 @@ export function CeilingEditor({
           )}
         </span>
       )}
-      {saved && saved.standing !== "passed" && (
-        <span className="ceiling-applying t-caption" role="status">
-          {saved.standing === "applied"
-            ? "applied"
-            : saved.standing === "refused"
-              ? "refused by this node"
-              : "applying…"}
+      {saved?.standing === "refused" && (
+        <span className="ceiling-refused t-caption" role="status">
+          {REFUSED_HERE}
         </span>
       )}
       {/* A PANEL ANCHORED TO THE PENCIL, not a field in the cell: a check's
@@ -476,7 +472,6 @@ export function RaiseBudgetDialog({
   focus?: Period;
   onClose: () => void;
 }) {
-  const toast = useToast();
   const waiting = useWaiting();
   const access = useOrgWriteAccess(targetOf(scope));
   const budgets = useQuery("budgets", undefined);
@@ -524,22 +519,15 @@ export function RaiseBudgetDialog({
     return read.ok && read.value !== (windowOf(windows, period)?.limit ?? null);
   });
 
-  // A SAVE ENDS THE DIALOG, and the toast carries the revision's own summary:
-  // the sentence the history will show.
-  const savedSummary = write.state.kind === "saved" ? write.state.summary : null;
-  const announced = useRef(false);
+  // A SAVE ENDS THE DIALOG; the write's own toast confirms it.
+  const saved = write.state.kind === "saved";
+  const closed = useRef(false);
   useEffect(() => {
-    // ONCE: the parent's `onClose` is a new function on every render, and a
-    // render between this save and the unmount would say "Saved" twice.
-    if (savedSummary === null || announced.current) return;
-    announced.current = true;
-    toast.show({
-      variant: "success",
-      title: savedSummary,
-      message: "Saved.",
-    });
+    // ONCE: the parent's `onClose` is a new function on every render.
+    if (!saved || closed.current) return;
+    closed.current = true;
     onClose();
-  }, [savedSummary, toast, onClose]);
+  }, [saved, onClose]);
 
   const blocked = !access.can
     ? access.reason

@@ -78,8 +78,9 @@ export interface PressLabel {
    * answer — for a write whose answer says more than that it landed: a note
    * the turn reads at its next step, or once its question is answered.
    * Undefined, or an answer it cannot read, says the generic sentence.
+   * `pending` is true while this node has not applied it, where the words may not hold yet.
    */
-  landed?: (receipt: unknown) => string | undefined;
+  landed?: (receipt: unknown, pending: boolean) => string | undefined;
   /**
    * The control draws what came back in place of a toast: an answer the
    * person asked for is shown where they asked, and a toast saying "Answered"
@@ -300,7 +301,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
               ...action,
             });
           } else {
-            const said = press.label.landed?.(result.receipt);
+            const said = press.label.landed?.(result.receipt, false);
             if (said)
               toast.show({ variant: "success", title: press.label.done, message: said, ...action });
             else toast.ok(press.label.done, action);
@@ -311,7 +312,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           // A PENDING WRITE WAS DECIDED, so its caveats are as true as an
           // applied one's, and said beside the wait — which is the write's
           // own sentence where its label words its receipt.
-          const said = press.label.landed?.(result.receipt) ?? PENDING_SENTENCE;
+          const said = press.label.landed?.(result.receipt, true) ?? PENDING_SENTENCE;
           const caveated = press.label.drawsCaveats ? null : caveatToast(result.caveats, said);
           toast.show({
             variant: caveated?.variant ?? "info",

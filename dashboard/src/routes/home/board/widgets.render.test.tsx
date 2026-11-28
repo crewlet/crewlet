@@ -455,6 +455,8 @@ const PARTIAL: Record<string, unknown> = {
     position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
     channels: [],
     read_state: true,
+    waiting: [],
+    waiting_capped: false,
     member: true,
   },
   chat_activity: {

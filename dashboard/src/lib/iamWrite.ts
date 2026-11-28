@@ -46,6 +46,8 @@
  * answer asks for hands back the same link rather than a second person.
  */
 
+import { useCallback } from "react";
+import { useToast } from "@crewlethq/ui";
 import {
   keyedWrite,
   useKeyedGesture,
@@ -78,6 +80,25 @@ export function iamWrite(req: IamRequest): Promise<IamAnswer> {
 /** One gesture's write: its key, its answer, and whether it is out. */
 export type IamGesture = KeyedGesture<IamRequest>;
 
+/** What a `202` is confirmed by: recorded, and the lists catch up once this node applies it. */
+export const IAM_PENDING = "Saved. The list will update in a moment.";
+
+/**
+ * One gesture's write, a `202` confirmed by the toast every write's pending
+ * answer is (`lib/useAct.ts`), so the dialog that made it can close.
+ */
 export function useIamGesture(): IamGesture {
-  return useKeyedGesture(iamWrite);
+  const gesture = useKeyedGesture(iamWrite);
+  const toast = useToast();
+  const { run: send } = gesture;
+  const run = useCallback<IamGesture["run"]>(
+    async (req, keyed) => {
+      const answer = await send(req, keyed);
+      if (answer?.kind === "done" && answer.pending)
+        toast.show({ variant: "info", message: IAM_PENDING });
+      return answer;
+    },
+    [send, toast],
+  );
+  return { ...gesture, run };
 }

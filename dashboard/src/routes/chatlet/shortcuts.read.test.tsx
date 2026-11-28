@@ -39,13 +39,14 @@ async function inRoom(unread: number) {
       chat_channels: {
         ...SERVED,
         read_state: true,
+        waiting: [],
+        waiting_capped: false,
         read: { handle: "ada", revision: 1, cursors: {} },
         channels: [
           {
             channel: CHANNEL,
             revision: 1,
             unread,
-            mentions: 0,
             last: {
               message_id: "m-9",
               channel_seq: 9,

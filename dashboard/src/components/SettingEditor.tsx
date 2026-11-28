@@ -14,9 +14,10 @@
  * A RESET IS A SAVE OF THE DEFAULT on the same path: checked, and where the
  * engine warns or refuses, the panel opens on the default to say so.
  *
- * WHAT IT SHOWS AFTER A SAVE is the value SAVED, marked as applying, until
- * this node has applied it and the answer the page draws carries it. A node
- * that refused the revision goes on running the value before.
+ * WHAT IT SHOWS AFTER A SAVE is the value SAVED until this node has applied
+ * it and the answer the page draws carries it; the save's toast says it is
+ * applying. A node that refused the revision goes on running the value
+ * before, marked so beside it.
  *
  * The pencil is always drawn, held with its reason for a reader who may not
  * change it ([SettingPencil]), also where the engine's row is not served ([UnreadSetting]).
@@ -32,7 +33,7 @@ import {
 } from "@crewlethq/ui";
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import { forwardRef, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { REFUSED_HERE, SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -170,8 +171,8 @@ export function SettingEditor<S, V>({
     }
   }, [standing, answer, expected, reset, served]);
 
-  // A SAVE CLOSES THE FIELD: the value beside the pencil says the new one and
-  // that it is applying, which is the answer the person was waiting for.
+  // A SAVE CLOSES THE FIELD: the value beside the pencil says the new one, and
+  // the save's toast that it is applying.
   useEffect(() => {
     if (!editing || !saved) return;
     setEditing(false);
@@ -232,7 +233,7 @@ export function SettingEditor<S, V>({
   const drawsSaved =
     saved && (saved.standing === "applying" || saved.standing === "applied") && expected !== null;
   const shown = draw(drawsSaved ? expected : null);
-  const mark = saved ? standingWords(saved.standing) : "";
+  const mark = saved?.standing === "refused" ? REFUSED_HERE : "";
   return (
     <SettingsTable.Row
       label={label}
@@ -306,7 +307,7 @@ export function SettingEditor<S, V>({
       <span className="setting-value">
         <span>{shown.value}</span>
         {mark && (
-          <span className="setting-value-applying t-caption" role="status">
+          <span className="setting-value-refused t-caption" role="status">
             {mark}
           </span>
         )}

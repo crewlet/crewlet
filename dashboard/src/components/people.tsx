@@ -447,7 +447,7 @@ export function ShownOnce({
   );
 }
 
-/** What a write came to, where it is not simply done. */
+/** What a write came to, where the person must act on it; one that landed is its toast's. */
 export function IamOutcome({ answer }: { answer: IamAnswer | null }) {
   if (!answer) return null;
   if (answer.kind === "refused") {
@@ -461,13 +461,6 @@ export function IamOutcome({ answer }: { answer: IamAnswer | null }) {
     return (
       <Callout variant="warning" role="alert" title="Not confirmed">
         {answer.text}
-      </Callout>
-    );
-  }
-  if (answer.pending) {
-    return (
-      <Callout variant="neutral" role="status">
-        Saved. The list will update in a moment.
       </Callout>
     );
   }
@@ -1284,7 +1277,7 @@ export function CancelInvitation({
         });
         if (!answer) return;
         onChanged();
-        if (answer.kind === "done" && !answer.pending) onClose();
+        if (answer.kind === "done") onClose();
       }}
     >
       The link stops working.
@@ -1333,7 +1326,7 @@ export function ConfirmDialog({
   // its dismissal and an enabled confirm that sent the same 409 again.
   const stale = write.answer?.kind === "refused" && write.answer.stale;
   // AND DONE IS DONE, a 202 included: the gesture is recorded and this node
-  // has yet to apply it, which the outcome says. Its dismissal read as undoing
+  // has yet to apply it, which its toast says. Its dismissal read as undoing
   // a cancellation already durable ("Keep it"), and the confirm sent the same
   // gesture again under a new key.
   const done = write.answer?.kind === "done";

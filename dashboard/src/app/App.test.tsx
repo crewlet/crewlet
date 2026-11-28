@@ -839,8 +839,14 @@ describe("chat, for a person", () => {
     position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 3 },
   };
 
-  /** The frame, as a person bound to `ada` holding Chatlet, recording every question asked. */
-  function mountChat(hash: string) {
+  /**
+   * The frame, as a person bound to `ada` holding Chatlet, recording every
+   * question asked; `answers` overrides a question's answer.
+   */
+  function mountChat(
+    hash: string,
+    answers: Record<string, (params?: Record<string, unknown>) => unknown> = {},
+  ) {
     location.hash = hash;
     const asked: string[] = [];
     const store = new Store();
@@ -855,8 +861,14 @@ describe("chat, for a person", () => {
       }),
     );
     const socket = new LiveSocket(store);
-    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
+    (
+      socket as unknown as {
+        query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).query = async (what, params) => {
       asked.push(what);
+      const answer = answers[what];
+      if (answer) return answer(params);
       switch (what) {
         case "viewer":
           return {
@@ -870,7 +882,7 @@ describe("chat, for a person", () => {
             chat_vendors: [],
           };
         case "chat_channels":
-          return { ...served, read_state: true, channels: [] };
+          return { ...served, read_state: true, waiting: [], waiting_capped: false, channels: [] };
         case "chat_activity":
           return {
             ...served,
@@ -928,6 +940,119 @@ describe("chat, for a person", () => {
       expect(view.container.querySelector(".crewlet-section-frame__nav")).toBeNull();
     },
   );
+
+  // ONE COUNT FOR EVERY BADGE: the sidebar's Chatlet row, Menu, the room's row
+  // and its thread's line draw the rail's `waiting`, and Activity marks the
+  // same rows unread. Here a mention and two replies in a followed thread wait
+  // in #general, and one direct message: Activity lists the three, the sidebar
+  // adds the conversation. Mutation: count a room's mentions alone again and
+  // the sidebar says 2; draw a thread's line from its positions and it says 1.
+  test("the sidebar badge, Activity, the room's row and the thread's line agree", async () => {
+    const ROOM = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
+    const DM = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const room = {
+      v: 1,
+      id: ROOM,
+      kind: "public",
+      name: "general",
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const dm = { v: 1, id: DM, kind: "dm", name: "", created_at: "2026-01-01T00:00:00Z" };
+    const at = (seq: number) => ({ stream: "CREWLET_CHAT_LOG", generation: 1, seq });
+    const row = (kind: string, id: string, thread?: string) => ({
+      key: `${kind}:${id}`,
+      kind,
+      message_id: id,
+      channel_id: room.id,
+      channel_name: room.name,
+      channel_kind: "public",
+      ...(thread ? { thread_root: thread } : {}),
+      actor: "bo",
+      actor_kind: "human",
+      excerpt: `said ${id}`,
+      at: "2026-01-01T00:03:00Z",
+      unread: true,
+      read_through: 30,
+    });
+    const answers = {
+      chat_channels: () => ({
+        ...served,
+        read_state: true,
+        channels: [
+          { channel: room, revision: 1, unread: 1, member: true },
+          { channel: dm, revision: 1, unread: 1, member: true, participants: ["ada", "bo"] },
+        ],
+        waiting: [
+          { channel_id: DM, root_id: "", count: 1, capped: false },
+          { channel_id: ROOM, root_id: "", count: 1, capped: false },
+          { channel_id: ROOM, root_id: "m-5", count: 2, capped: false },
+        ],
+        waiting_capped: false,
+      }),
+      chat_activity: () => ({
+        ...served,
+        items: [row("mention", "m-9"), row("reply", "r-2", "m-5"), row("reply", "r-1", "m-5")],
+        unread: { mention: 1, reply: 2 },
+        read_state: true,
+      }),
+      chat_channel: () => ({
+        ...served,
+        channel: room,
+        revision: 1,
+        message_seq: 9,
+        member: true,
+        members: [],
+      }),
+      chat_messages: () => ({
+        ...served,
+        channel_id: room.id,
+        messages: [
+          {
+            message: {
+              v: 1,
+              id: "m-5",
+              channel_id: room.id,
+              author: "ada",
+              author_kind: "human",
+              body: "who owns it?",
+              created_at: "2026-01-01T00:00:00Z",
+            },
+            channel_seq: 5,
+            position: at(5),
+            thread: {
+              replies: 2,
+              last_reply_at: "2026-01-01T00:02:00Z",
+              last_reply_position: at(30),
+              repliers: ["bo"],
+              replier_count: 1,
+            },
+          },
+        ],
+      }),
+    };
+    mountChat("#/chatlet/activity", answers);
+    const sidebar = await screen.findByRole("navigation", { name: "Navigation" });
+    await waitFor(() =>
+      expect(
+        within(sidebar).getByRole("link", {
+          name: /^Chatlet, 4 unread direct messages, mentions and thread replies/,
+        }),
+      ).toBeTruthy(),
+    );
+    const tabs = await screen.findByRole("tablist", { name: "Show" });
+    expect(within(tabs).getByRole("tab", { name: /Mentions.*1/ })).toBeTruthy();
+    expect(within(tabs).getByRole("tab", { name: /Threads.*2/ })).toBeTruthy();
+    expect(screen.getAllByText("Unread")).toHaveLength(3 + 1);
+    expect(screen.getByRole("button", { name: "Menu, 4 waiting for you" })).toBeTruthy();
+
+    location.hash = `#/chatlet/${ROOM}`;
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^2 replies, 2 new/ })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Menu/ }));
+    const panel = await screen.findByRole("dialog", { name: "Rooms" });
+    expect(within(panel).getByRole("link", { name: /^general.*3/ })).toBeTruthy();
+  });
 
   // EVERY VIEW IS ITS ROW'S SECTION, named in the trail as the row names it:
   // a dispatch that drew another view under it would be named wrong.

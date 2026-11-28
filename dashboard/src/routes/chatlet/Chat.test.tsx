@@ -70,7 +70,6 @@ function room(id: string, name: string, over: Record<string, unknown> = {}) {
     },
     revision: 3,
     unread: 0,
-    mentions: 0,
     last: {
       message_id: `${id}-last`,
       channel_seq: 4,
@@ -81,13 +80,41 @@ function room(id: string, name: string, over: Record<string, unknown> = {}) {
   };
 }
 
-/** The reader's rooms, measured, with these rows. */
+/** A row's test-only inputs: posts naming the reader, replies per thread, and
+ *  whether the engine's count of the room stopped at its window. */
+type Waits = { posts?: number; threads?: Record<string, number>; floor?: boolean };
+
+/**
+ * The reader's rooms, measured, with these rows, and what waits on them as the
+ * engine counts it (`chatlet.Waiting`): a conversation's unread posts, a named
+ * room's `posts`, each of its `threads`, nothing in a muted room.
+ */
 function rail(channels: unknown[], read: Record<string, unknown> = {}) {
+  const waiting: { channel_id: string; root_id: string; count: number; capped: boolean }[] = [];
+  const rows = (channels as (Record<string, unknown> & Waits)[]).map(
+    ({ posts, threads, floor = false, ...row }) => {
+      const { channel, unread, muted } = row as {
+        channel: { id: string; kind: string };
+        unread: number;
+        muted?: boolean;
+      };
+      const direct = channel.kind === "dm" || channel.kind === "group";
+      const own = direct ? unread : (posts ?? 0);
+      if (!muted && own > 0)
+        waiting.push({ channel_id: channel.id, root_id: "", count: own, capped: floor });
+      for (const [root, count] of Object.entries(threads ?? {})) {
+        if (!muted) waiting.push({ channel_id: channel.id, root_id: root, count, capped: floor });
+      }
+      return row;
+    },
+  );
   return {
     ...served,
     read_state: true,
+    waiting,
+    waiting_capped: false,
     read: { handle: "ada", revision: 1, cursors: {}, ...read },
-    channels,
+    channels: rows,
   };
 }
 
@@ -377,17 +404,23 @@ describe("the Rooms panel", () => {
     expect(within(section("Direct messages")).getByText("bo")).toBeTruthy();
   });
 
-  test("badges what waits on the reader: a room's mentions, stopping at 99+ where the engine stopped", async () => {
-    // The cap is `chatlet.UnreadLimit` and the answer SAYS when it was reached,
-    // so "99+" renders a stated fact.
+  test("badges what waits on the reader: a room's posts and its threads' replies, a floor where the engine stopped", async () => {
+    // Each room is counted over its newest `chatlet.UnreadLimit` messages and
+    // the answer SAYS when every one was unread, so "100+" renders a stated fact.
     mountScreen({
       answer: chatAnswers([
-        room(GENERAL, "general", { unread: 100, unread_capped: true, mentions: 100 }),
-        room(LAUNCH, "launch", { unread: 9, mentions: 7 }),
+        room(WITH_BO, "", {
+          channel: { kind: "dm", name: "" },
+          participants: ["ada", "bo"],
+          unread: 100,
+          unread_capped: true,
+          floor: true,
+        }),
+        room(LAUNCH, "launch", { unread: 9, posts: 4, threads: { "root-1": 3 } }),
       ]),
     });
     const panel = await openPanel();
-    await waitFor(() => expect(within(panel).getByText("99+")).toBeTruthy());
+    await waitFor(() => expect(within(panel).getByText("100+")).toBeTruthy());
     expect(within(panel).getByText("7")).toBeTruthy();
   });
 
@@ -398,7 +431,6 @@ describe("the Rooms panel", () => {
           channel: { kind: "dm", name: "" },
           participants: ["ada", "bo"],
           unread: 3,
-          mentions: 0,
         }),
       ]),
     });
@@ -410,7 +442,7 @@ describe("the Rooms panel", () => {
     // A MUTE SUPPRESSES NOTICE, never delivery: the badge is notice, so it
     // goes, and the row still says it is muted rather than looking caught up.
     mountScreen({
-      answer: chatAnswers([room(GENERAL, "general", { unread: 3, mentions: 2, muted: true })]),
+      answer: chatAnswers([room(GENERAL, "general", { unread: 3, posts: 2, muted: true })]),
     });
     const panel = await openPanel();
     // THE ROW SAYS IT IS MUTED, to a screen reader as to the eye.
@@ -426,7 +458,13 @@ describe("the Rooms panel", () => {
     mountScreen({
       answer: async (what, params) =>
         what === "chat_channels"
-          ? { ...served, read_state: false, channels: [room(GENERAL, "general", { mentions: 0 })] }
+          ? {
+              ...served,
+              read_state: false,
+              waiting: [],
+              waiting_capped: false,
+              channels: [room(GENERAL, "general")],
+            }
           : answers(what, params),
     });
     const panel = await openPanel();
@@ -615,7 +653,7 @@ describe("the top bar", () => {
   test("Menu carries the sidebar's figure of what waits on the reader", async () => {
     mountScreen({
       answer: chatAnswers([
-        room(GENERAL, "general", { unread: 5, mentions: 2 }),
+        room(GENERAL, "general", { unread: 5, posts: 2 }),
         room(WITH_BO, "", {
           channel: { kind: "dm", name: "" },
           participants: ["ada", "bo"],
@@ -711,7 +749,7 @@ test("a switcher's count says it is what waits in the other rooms", async () => 
     hash: `#/chatlet/${GENERAL}`,
     answer: chatAnswers([
       room(GENERAL, "general"),
-      room(LAUNCH, "launch", { unread: 2, mentions: 2 }),
+      room(LAUNCH, "launch", { unread: 2, posts: 2 }),
     ]),
   });
   const trigger = await screen.findByRole("button", { name: /#general/ });

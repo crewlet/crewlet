@@ -112,6 +112,13 @@ type (
 		Emoji   string `json:"emoji"`
 	}
 
+	// takeAsk is a running turn's take of a message, on one seat's receipt.
+	takeAsk struct {
+		Channel string `json:"channel"`
+		Handle  string `json:"handle"`
+		As      Taken  `json:"as"`
+	}
+
 	// retentionAsk is the room's retention override a gesture states, nil
 	// for the company's default.
 	retentionAsk struct {

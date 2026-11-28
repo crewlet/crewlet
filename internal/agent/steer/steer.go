@@ -477,6 +477,11 @@ type Wake struct {
 	// may read and answer, never a request it acts on (ADR-0109).
 	Informs bool
 
+	// Message is the chat message it was written as, whose receipt the engine
+	// marks when a running turn takes it, as the engine names it; "" for a
+	// wake whose message keeps no receipt.
+	Message string
+
 	// FromRun and FromSeat are the run that sent it with `message_run` and
 	// that run's seat, "" for a wake from the seat's inbox (ADR-0176): a
 	// message from a run working for the same requester, read as information

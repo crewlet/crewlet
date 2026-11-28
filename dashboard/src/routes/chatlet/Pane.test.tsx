@@ -63,7 +63,15 @@ function mount() {
   actEngine();
   const mounted = mountInFrame(<Harness />, {
     hash: "#/chatlet",
-    answers: { chat_channels: { ...SERVED, read_state: true, channels: [] } },
+    answers: {
+      chat_channels: {
+        ...SERVED,
+        read_state: true,
+        waiting: [],
+        waiting_capped: false,
+        channels: [],
+      },
+    },
   });
   act(() => mounted.store.applyOrg(CHAT_ORG as never));
   return mounted;
@@ -124,7 +132,15 @@ test("an open pane keeps the toast stack beside it, and lets go when it closes",
     </InsetToastProvider>,
     {
       hash: "#/chatlet",
-      answers: { chat_channels: { ...SERVED, read_state: true, channels: [] } },
+      answers: {
+        chat_channels: {
+          ...SERVED,
+          read_state: true,
+          waiting: [],
+          waiting_capped: false,
+          channels: [],
+        },
+      },
     },
   );
   act(() => mounted.store.applyOrg(CHAT_ORG as never));

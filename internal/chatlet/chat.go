@@ -118,6 +118,18 @@
 // that guarantees it, are recipients.go's, one set of functions the decide
 // and the parser both call so writer and parser cannot disagree.
 //
+// # What waits on a reader
+//
+// One count answers every badge a reader sees ([waiting]). A message waits
+// when it is unread (above both its room's place and its thread's), not
+// theirs, not taken back, in a room they have not muted, and addressed to
+// them: a post in a direct conversation, a message naming them or the room,
+// or a reply in a thread they follow. Each counts once, room by room over
+// each room's newest [UnreadLimit] messages, which hold everything above the
+// reader's place there unless all are, and then the count is a floor. Activity
+// marks exactly these rows unread, and the rail carries them place by place
+// ([ChannelListing.Waiting]), so no two badges can differ.
+//
 // The read types declare the fields that hold somebody else's words
 // (`untrusted:"fence"` or `untrusted:"name"`, provenance.FieldTag), which the
 // agent's read tools may not answer unlabelled.

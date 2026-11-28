@@ -20,6 +20,7 @@ import {
   unreadLabel,
   sectionRooms,
 } from "./rooms.ts";
+import { chatWaiting } from "~/lib/chatRooms.ts";
 import type { ChatChannel, ChatChannelSummary } from "~/protocol/index.ts";
 
 const channel = (over: Partial<ChatChannel> = {}): ChatChannel => ({
@@ -143,7 +144,6 @@ describe("the reader's rooms as the panel lists them", () => {
       channel: { v: 1, id, kind, name: id, created_at: "2026-01-01T00:00:00Z" },
       revision: 1,
       unread: 0,
-      mentions: 0,
       ...over,
     }) as unknown as ChatChannelSummary;
   // The store's order: newest activity first, every kind mixed.
@@ -167,7 +167,12 @@ describe("the reader's rooms as the panel lists them", () => {
   const base = {
     options: { unreadOnly: false, sort: "activity" as const },
     starred: new Set(["star"]),
-    measured: true,
+    waiting: chatWaiting({
+      read_state: true,
+      channels: [],
+      waiting: [{ channel_id: "team", root_id: "t", count: 1, capped: false }],
+      waiting_capped: false,
+    } as never),
     current: "alpha",
     titleOf: (room: ChatChannelSummary) => room.channel.name ?? room.channel.id,
   };
@@ -190,12 +195,14 @@ describe("the reader's rooms as the panel lists them", () => {
     expect(ids(sections)[1]).toBe("channels:alpha,beta");
   });
 
+  // THE TEAM ROOM'S ONLY UNREAD IS A REPLY WAITING IN ONE OF ITS THREADS, and
+  // that keeps it. Mutation: narrow on room posts alone and it goes.
   test("narrowed to unread rooms, keeping the open one", () => {
     const sections = sectionRooms(store, {
       ...base,
       options: { unreadOnly: true, sort: "activity" },
     });
-    expect(ids(sections)).toEqual(["starred:", "channels:beta,alpha", "teams:", "direct:"]);
+    expect(ids(sections)).toEqual(["starred:", "channels:beta,alpha", "teams:team", "direct:"]);
   });
 
   test("narrowed by what the reader typed", () => {

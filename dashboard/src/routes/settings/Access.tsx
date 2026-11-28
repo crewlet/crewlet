@@ -2442,7 +2442,7 @@ function PersonWrite({
         if (!answer) return;
         onDone();
         if (answer.kind === "done") onLanded?.();
-        if (answer.kind === "done" && !answer.pending) onClose();
+        if (answer.kind === "done") onClose();
       }}
     >
       {children}

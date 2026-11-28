@@ -37,7 +37,13 @@ test("a screenful of previews asks one wave at a time, and the next as each answ
     {
       answer: (what) => {
         if (what === "chat_channels") {
-          return Promise.resolve({ ...SERVED, read_state: true, channels: [] });
+          return Promise.resolve({
+            ...SERVED,
+            read_state: true,
+            waiting: [],
+            waiting_capped: false,
+            channels: [],
+          });
         }
         if (what === "chat_unfurls") {
           return new Promise((resolve) => pending.push(() => resolve({ ...SERVED, unfurls: [] })));

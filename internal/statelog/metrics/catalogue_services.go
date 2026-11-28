@@ -153,7 +153,8 @@ func serviceInstruments() []Instrument {
 				"decided for each wake reaching the seat, once per wake and job " +
 				"(ADR-0167, ADR-0168, ADR-0169): `joined` when it handed the " +
 				"wake to the run (a lead's steer as their note), `absorbed` when " +
-				"its triage found it noise owing nothing, `refused` when the " +
+				"its triage found it noise owing nothing in the run's own " +
+				"conversation, `refused` when the " +
 				"run's record took no more, and `left_queued` when it waits for " +
 				"a turn of its own; and below the seat's cap, `waited` for each " +
 				"wake set aside until the run it relates to leaves (whatever " +

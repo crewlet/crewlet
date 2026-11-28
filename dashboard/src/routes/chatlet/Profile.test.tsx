@@ -28,7 +28,6 @@ function room(id: string, name: string) {
     channel: { v: 1, id, kind: "public", name, created_at: "2026-01-01T00:00:00Z" },
     revision: 1,
     unread: 0,
-    mentions: 0,
     member: true,
   };
 }
@@ -46,7 +45,13 @@ function mount(
     hash: "#/chatlet",
     answer: async (what, params) =>
       what === "chat_channels"
-        ? { ...SERVED, read_state: true, channels: params?.with ? common : [] }
+        ? {
+            ...SERVED,
+            read_state: true,
+            waiting: [],
+            waiting_capped: false,
+            channels: params?.with ? common : [],
+          }
         : {},
   });
   if (chart) act(() => mounted.store.applyOrg(CHAT_ORG as never));

@@ -30,13 +30,14 @@ const conversation = (
   member: true,
   revision: 1,
   unread,
-  mentions: 0,
   last: { message_id: `${id}-last`, channel_seq: 3, position: SERVED.position, ...last },
 });
 
 const RAIL = {
   ...SERVED,
   read_state: true,
+  waiting: [],
+  waiting_capped: false,
   channels: [
     conversation(DM_OPS, "dm", ["ada", "ops"], {
       author: "ops",
@@ -66,7 +67,6 @@ const RAIL = {
       member: true,
       revision: 1,
       unread: 4,
-      mentions: 0,
     },
   ],
 };

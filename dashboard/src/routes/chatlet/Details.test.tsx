@@ -51,6 +51,8 @@ const detail = (channel: Record<string, unknown> = {}, extra: Record<string, unk
 const rail = {
   ...SERVED,
   read_state: true,
+  waiting: [],
+  waiting_capped: false,
   read: { handle: "ada", revision: 2, cursors: {}, every: [], muted: [] },
   channels: [],
 };

@@ -41,6 +41,7 @@ import {
 import { href, useNavigator } from "~/app/router.tsx";
 import { CHAT_VIEWS, mintedID, type ChatView } from "~/app/routes.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
+import type { ChatWaiting } from "~/lib/chatRooms.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type {
   ChatChannel,
@@ -467,6 +468,8 @@ export interface ChatFrame {
   channels: readonly ChatChannelSummary[];
   /** The badges are a measurement (`rooms.ts`'s `badgesAreMeasured`). */
   measured: boolean;
+  /** What waits on the reader, room by room (`lib/chatRooms.ts`); null unmeasured. */
+  waiting: ChatWaiting | null;
   /** Every message still being sent, from every room (`outbox.ts`). */
   outbox: OutboxHandle;
   /** The seat's one read cursor writer (`cursor.ts`). */
