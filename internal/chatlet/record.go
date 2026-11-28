@@ -22,10 +22,12 @@ import (
 // the table, to its highest version: statelogtest refuses a build reading a
 // version no field introduced, which would drop a newer peer's field.
 //
-// Versions: 1 every shape this domain has; 2 an agent's ask, the seats held
-// back and asked, and the asks answered (ADR-0113); 3 whom a waking agent
-// message was written for ([MutationRecord.WorkingFor], ADR-0109).
-const RecordVersion = 3
+// Versions: 1 every shape; 2 an agent's ask, the seats held back and asked, and
+// the asks answered (ADR-0113); 3 [MutationRecord.WorkingFor] (ADR-0109); 4 [OpTake].
+const RecordVersion = 4
+
+// TakeVersion is the version from which a record may be an [OpTake].
+const TakeVersion = 4
 
 // WorkingForVersion is the version from which a record carries whom it was
 // written for ([MutationRecord.WorkingFor]), which the applier keeps on the
@@ -64,6 +66,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Notify.Asked", Since: 2, Path: []string{"notify", "asked"}},
 	{Name: "Notify.Answering", Since: 2, Path: []string{"notify", "answering"}},
 	{Name: "MutationRecord.WorkingFor", Since: WorkingForVersion, Path: []string{"working_for"}},
+	{Name: "RecordEnvelope.Op take", Since: TakeVersion, Path: []string{"op"}, Equals: string(OpTake)},
 }
 
 // VersionedFields is the table, for the conformance suite.

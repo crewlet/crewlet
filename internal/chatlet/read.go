@@ -1487,8 +1487,13 @@ type MessageView struct {
 	// LATER messages and the document is the post's own.
 	Answered []Answer `json:"answered,omitempty"`
 
+	// Taken is which of the seats it reached took it into their running turn
+	// instead of a turn of their own, and how, while they have not answered
+	// it ([OpTake]): read beside the page from `chat_receipts`, as Answered.
+	Taken []Take `json:"taken,omitempty"`
+
 	// Delivery is where a PERSON'S post stands with the agents it reached,
-	// read from its reach and its answers: [DeliveryUnknown] for one whose
+	// read from its reach, its answers and its takes: [DeliveryUnknown] for one whose
 	// reach was never recorded, and empty on everything that is not a
 	// person's post (an agent's message, a room event). One word a reader
 	// can filter or badge on, beside the two lists it is read from.
@@ -1516,14 +1521,23 @@ const (
 	// answered, and some have not.
 	DeliveryPartlyAnswered Delivery = "partly_answered"
 
-	// DeliveryAnswered is a post every agent it reached has answered.
+	// DeliveryAnswered is a post every agent it reached has answered, or
+	// read in its running turn finding nothing asked ([TakenAbsorbed]).
 	DeliveryAnswered Delivery = "answered"
 )
 
-// deliveryOf is the state of a message with these answers: a person's post
-// by its reach, and nothing for any other message.
-func deliveryOf(m Message, answered []Answer) Delivery {
+// deliveryOf is the state of a message with these answers and takes: a
+// person's post by its reach, and nothing for any other message. A seat whose
+// running turn absorbed it owes it nothing, so counts as answered; one that
+// joined it still owes the answer.
+func deliveryOf(m Message, answered []Answer, taken []Take) Delivery {
 	r := m.Reach
+	settled := len(answered)
+	for _, t := range taken {
+		if t.As == TakenAbsorbed {
+			settled++
+		}
+	}
 	switch {
 	case m.AuthorKind != AuthorHuman || m.Event != nil:
 		return ""
@@ -1531,9 +1545,9 @@ func deliveryOf(m Message, answered []Answer) Delivery {
 		return DeliveryUnknown
 	case len(r.Recipients) == 0:
 		return DeliveryNoAgent
-	case len(answered) == 0:
+	case settled == 0:
 		return DeliveryWaiting
-	case len(answered) < len(r.Recipients):
+	case settled < len(r.Recipients):
 		return DeliveryPartlyAnswered
 	}
 	return DeliveryAnswered
@@ -1546,6 +1560,14 @@ type Answer struct {
 	// MessageID is the message that answered, and At its broker instant.
 	MessageID string    `json:"message_id"`
 	At        time.Time `json:"at"`
+}
+
+// Take is a seat's running turn having taken a message it was reached by
+// ([OpTake]): how, and the broker's instant of the record that said so.
+type Take struct {
+	Handle string    `json:"handle"`
+	As     Taken     `json:"as"`
+	At     time.Time `json:"at"`
 }
 
 // ThreadSummary is a root's replies, as a transcript shows them under it.
@@ -2108,13 +2130,14 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 		return messagePage{}, err
 	}
 	for i := range out.views {
-		out.views[i].Delivery = deliveryOf(out.views[i].Message, out.views[i].Answered)
+		out.views[i].Delivery = deliveryOf(out.views[i].Message, out.views[i].Answered, out.views[i].Taken)
 	}
 	return out, attachThreads(ctx, tx, out.views)
 }
 
 // attachAnswers puts on each post with a reach the seats that have answered
-// it, in one statement for the page.
+// it, and those whose running turn took it unanswered, in one statement for
+// the page.
 //
 // ONLY THE POSTS THAT REACHED SOMEBODY ARE ASKED ABOUT, which is a person's
 // posts and nothing else, so a page of agents talking costs no statement at
@@ -2133,26 +2156,31 @@ func attachAnswers(ctx context.Context, tx *sql.Tx, views []MessageView) error {
 		return nil
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT message_id, handle, answer_id, answered_at
+		SELECT message_id, handle, answer_id, COALESCE(answered_at, 0), taken, taken_at
 		  FROM chat_receipts
-		 WHERE message_id IN (`+placeholders(len(ids))+`) AND answer_id <> ''
-		 ORDER BY message_id, answered_at, handle`, ids...)
+		 WHERE message_id IN (`+placeholders(len(ids))+`) AND (answer_id <> '' OR taken <> '')
+		 ORDER BY message_id, COALESCE(answered_at, taken_at), handle`, ids...)
 	if err != nil {
 		return fmt.Errorf("chatlet: read a page's answers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			id     string
-			answer Answer
-			when   int64
+			id, handle, answerID, taken string
+			answeredAt, takenAt         int64
 		)
-		if err := rows.Scan(&id, &answer.Handle, &answer.MessageID, &when); err != nil {
+		if err := rows.Scan(&id, &handle, &answerID, &answeredAt, &taken, &takenAt); err != nil {
 			return fmt.Errorf("chatlet: scan an answer: %w", err)
 		}
-		answer.At = store.DecodeTime(when)
-		if i, ok := at[id]; ok {
-			views[i].Answered = append(views[i].Answered, answer)
+		i, ok := at[id]
+		switch {
+		case !ok:
+		case answerID != "":
+			views[i].Answered = append(views[i].Answered,
+				Answer{Handle: handle, MessageID: answerID, At: store.DecodeTime(answeredAt)})
+		default:
+			views[i].Taken = append(views[i].Taken, Take{Handle: handle, As: Taken(taken),
+				At: store.DecodeTime(takenAt)})
 		}
 	}
 	return rows.Err()

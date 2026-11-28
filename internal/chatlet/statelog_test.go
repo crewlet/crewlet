@@ -92,6 +92,22 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		// THE AGENT'S POST WAKES THE ROOM, made in a turn a person woke:
 		// whom it was written for rides beside the agent.
 		carrier = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
+	case "RecordEnvelope.Op take":
+		// THE ENGINE'S TAKE OF THE MESSAGE, on a seat's receipt for it.
+		take, err := json.Marshal(chatlet.ReceiptTake{V: chatlet.DocumentVersion, MessageID: post.MessageID,
+			Handle: "colleague", As: chatlet.TakenJoined})
+		if err != nil {
+			return nil, err
+		}
+		return chatlet.Encode(chatlet.MutationRecord{
+			RecordEnvelope: chatlet.RecordEnvelope{
+				OpID: "suite-carrying", Op: chatlet.OpTake,
+				Subject:   chatlet.MessageSubject("carrying"),
+				Scope:     chatlet.ScopeSet{Subject: true},
+				CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: "suite-node",
+			},
+			Mutation: take, Actor: "sessions", ActorKind: chatlet.AuthorSystem,
+		})
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
