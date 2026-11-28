@@ -3014,7 +3014,15 @@ model only describes it; the engine decides (ADR-0168):
 | `input` | Files it as a wake from anybody, its line adding that the writer is not whom the turn works for: information to read and, where it asks, answer where it was written, never a request to act on. Claimed at its read, as above. |
 | `steer` | From a person the chart says leads the seat, files it as that lead's [note](turn-engine.md#steering-a-running-turn), several of their messages in one read as one note, oldest first; claimed at the filing (`joined`, naming the turn). While a note of theirs waits unread, their next messages wait to become the next note; past the turn's ten notes they stay. Anybody else's steer is a request. |
 | `request` | From a person or an agent seat other than the run's requester, is put once per job to the people who may let it [fold into the running work](#folding-another-writers-request-in): the requester and the seat's leads. Until one approves it waits; approved, it joins as a steer note; refused, unanswered when the job ends, or with nobody to put it to, it stays for a turn of its own, held to its own writer. Anybody else's request (a credential's) stays. |
-| `noise` | Absorbed (recorded worked by the running turn, `turn_trigger_skipped` disposition `absorbed` naming it) only when it owes nothing: no answer owed, not addressed to the seat, no question put to it. One that owes anything stays. |
+| `noise` | Absorbed (recorded worked by the running turn, `turn_trigger_skipped` disposition `absorbed` naming it) only when it owes nothing (no answer owed, not addressed to the seat, no question put to it) and was written in the run's own conversation. A person's message to the seat there (a reply in a thread it follows) is absorbed only once its Chatlet receipt says so. One that owes anything, or comes from another thread or room, stays for a turn of its own. |
+
+The triage is told where the wake was written against the run's conversation,
+so the same words in another thread read as that thread's request, not a repeat
+of the running task. **A person's Chatlet message a running turn takes says so
+on its receipt**: read as a wake, filed as a lead's note or an approved fold-in,
+it reads "taken into its running work" until the seat answers; absorbed, it
+reads as settled, "nothing to answer, read in its running work". A message
+that keeps the seat no receipt, or is gone, is never absorbed.
 
 A triage that decides nothing (no chain, a refusal, ninety seconds, an invalid
 answer) leaves the wake queued, logged `seat_wake_triaged` and counted
