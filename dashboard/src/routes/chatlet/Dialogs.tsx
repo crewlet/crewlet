@@ -515,6 +515,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
   const [chosen, setChosen] = useState<string[]>([]);
   const [confirmSkip, setConfirmSkip] = useState(false);
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   const field = useRef<HTMLInputElement>(null);
   const listId = useId();
 
@@ -551,7 +552,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
       { done: `Added people to ${name}`, quiet: true },
     );
     if (result === null) return;
-    if (result.kind === "applied" || result.kind === "pending") {
+    if (result.kind === "applied") {
       const added = (result.receipt as { added?: string[] } | null)?.added;
       const count = added?.length ?? chosen.length;
       toast.show({
@@ -564,7 +565,9 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
       onClose();
       return;
     }
-    setReport(reportFor("members", result));
+    const left = say(reportFor("members", result));
+    if (left) setReport(left);
+    else onClose();
   }
 
   function setAutoJoin(on: boolean) {
@@ -804,6 +807,7 @@ export function RoomTextDialog({
   const was = (field === "topic" ? channel?.topic : channel?.purpose) ?? "";
   const [text, setText] = useState<string | null>(null);
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   if (!channel) return null;
   const value = text ?? was;
   const copy = ROOM_TEXT[field];
@@ -828,7 +832,7 @@ export function RoomTextDialog({
     if (result === null) return;
     const answer = reportFor("topic", result);
     if (answer.settled && answer.tone !== "warning") {
-      toast.show({ variant: "success", message: copy.saved });
+      if (say(answer)) toast.show({ variant: "success", message: copy.saved });
       onClose();
       return;
     }
@@ -923,6 +927,7 @@ export function TemplateDialog({ room, onClose }: { room: string; onClose: () =>
   const update = useAct("update_channel");
   const [pick, setPick] = useState<RoomTemplate["id"]>(ROOM_TEMPLATES[0].id);
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   if (!channel) return null;
   const template = templateNamed(pick);
 
@@ -936,7 +941,8 @@ export function TemplateDialog({ room, onClose }: { room: string; onClose: () =>
     if (result === null) return;
     const answer = reportFor("topic", result);
     if (answer.settled && answer.tone !== "warning") {
-      toast.show({ variant: "success", message: `${template.name} template applied` });
+      if (say(answer))
+        toast.show({ variant: "success", message: `${template.name} template applied` });
       onClose();
       return;
     }
