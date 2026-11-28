@@ -311,7 +311,10 @@ function PersonCard({
       onSave={(next) => {
         void act.run(
           { instructions: next, if_match: revision },
-          { done: "Saved your instructions", landed: () => FOLLOWS_YOURS },
+          {
+            done: "Saved your instructions",
+            landed: (_, pending) => (pending ? undefined : FOLLOWS_YOURS),
+          },
         );
       }}
     />

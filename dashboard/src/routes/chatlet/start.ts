@@ -168,6 +168,13 @@ function what(kind: StartKind): string {
   }
 }
 
+/** What shows a pending gesture once this node applies it: the reader's rooms, or the room. */
+function catchesUp(kind: StartKind): string {
+  return navigates(kind) || kind === "leave"
+    ? "Your rooms will update in a moment."
+    : "The room will update in a moment.";
+}
+
 /** Whether this gesture lands somebody in a room when it applies. */
 function navigates(kind: StartKind): boolean {
   return kind === "channel" || kind === "direct" || kind === "join";
@@ -214,7 +221,7 @@ export function reportFor(kind: StartKind, result: ActResult): StartReport {
         // the one that would serve the read. Sending somebody to it now is a
         // "not found" for a room that is perfectly real.
         go: "",
-        note: "Saved, but not shown here yet. Your rooms will update in a moment.",
+        note: `Saved, but not shown here yet. ${catchesUp(kind)}`,
         tone: "pending",
         taken: false,
         again: false,

@@ -28,13 +28,16 @@ export function StartNote({ report }: { report: StartReport | null }) {
   );
 }
 
-/** Says a pending report as its toast, and hands back what is left to draw here: null for it. */
-export function useSayPending(): (report: StartReport) => StartReport | null {
+/**
+ * Says a pending report as its toast, titled `done` where the gesture names
+ * what it changed, and hands back what is left to draw here: null for it.
+ */
+export function useSayPending(): (report: StartReport, done?: string) => StartReport | null {
   const toast = useToast();
   return useCallback(
-    (report) => {
+    (report, done) => {
       if (report.tone !== "pending") return report;
-      toast.show({ variant: calloutFor(report.tone), message: report.note });
+      toast.show({ variant: calloutFor(report.tone), title: done, message: report.note });
       return null;
     },
     [toast],

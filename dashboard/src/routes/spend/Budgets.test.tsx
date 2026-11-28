@@ -30,7 +30,7 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { toastText } from "~/testing.tsx";
-import { APPLIED_SENTENCE, APPLYING_SENTENCE } from "~/lib/savedToast.ts";
+import { APPLIED_SENTENCE, APPLYING_SENTENCE, PASSED_SENTENCE } from "~/lib/savedToast.ts";
 import { sheetRules } from "~/test/sheets.ts";
 import {
   applyPageAction,
@@ -447,6 +447,8 @@ describe("a saved ceiling, followed by this node", () => {
     expect(budgetAsks).toBeGreaterThan(asks);
     expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).queryByRole("status")).toBeNull();
+    expect(toastText()).toContain(PASSED_SENTENCE);
+    expect(toastText()).not.toContain(APPLYING_SENTENCE);
   });
 });
 

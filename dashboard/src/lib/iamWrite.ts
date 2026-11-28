@@ -46,7 +46,7 @@
  * answer asks for hands back the same link rather than a second person.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { useToast } from "@crewlethq/ui";
 import {
   keyedWrite,
@@ -100,5 +100,5 @@ export function useIamGesture(): IamGesture {
     },
     [send, toast],
   );
-  return useMemo(() => ({ ...gesture, run }), [gesture, run]);
+  return { ...gesture, run };
 }

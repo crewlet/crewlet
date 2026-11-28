@@ -6,6 +6,7 @@
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ASSISTANT_INSTRUCTIONS_MAX_RUNES } from "~/contract/instructions.ts";
+import { PENDING_SENTENCE } from "~/lib/useAct.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -157,6 +158,20 @@ test("saving your instructions is confirmed by its toast, never a line in the ca
   expect(toastText()).toContain("Ask Crewlet follows them from your next question.");
   expect(within(yours).queryByText(/follows them/)).toBeNull();
   expect(within(yours).queryByRole("status")).toBeNull();
+});
+
+// A SAVE THIS NODE HAS NOT APPLIED YET says so, never that the next question
+// follows it, which may still be answered with the instructions before.
+test("a pending save of your instructions says it is not applied yet", async () => {
+  actAnswers(200, { outcome: "pending", position: "1:2", receipt: { seat: "jane", revision: 1 } });
+  await show({});
+  const yours = card("Your instructions");
+  fireEvent.click(within(yours).getByRole("radio", { name: "Brief" }));
+  fireEvent.click(within(yours).getByRole("button", { name: "Save" }));
+  await act(afterMicrotasks);
+  expect(toastText()).toContain("Saved your instructions");
+  expect(toastText()).toContain(PENDING_SENTENCE);
+  expect(toastText()).not.toContain("follows them");
 });
 
 // A REFUSAL STAYS BESIDE THE FORM, where the person fixes it, and no toast

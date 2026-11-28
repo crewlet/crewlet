@@ -565,7 +565,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
       onClose();
       return;
     }
-    const left = say(reportFor("members", result));
+    const left = say(reportFor("members", result), `Added people to ${name}`);
     if (left) setReport(left);
     else onClose();
   }
@@ -832,7 +832,7 @@ export function RoomTextDialog({
     if (result === null) return;
     const answer = reportFor("topic", result);
     if (answer.settled && answer.tone !== "warning") {
-      if (say(answer)) toast.show({ variant: "success", message: copy.saved });
+      if (say(answer, copy.saved)) toast.show({ variant: "success", message: copy.saved });
       onClose();
       return;
     }
@@ -941,7 +941,7 @@ export function TemplateDialog({ room, onClose }: { room: string; onClose: () =>
     if (result === null) return;
     const answer = reportFor("topic", result);
     if (answer.settled && answer.tone !== "warning") {
-      if (say(answer))
+      if (say(answer, `${template.name} template applied`))
         toast.show({ variant: "success", message: `${template.name} template applied` });
       onClose();
       return;

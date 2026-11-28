@@ -1,11 +1,12 @@
 /**
  * The toast a saved company-document change is confirmed by, as every write
  * a screen makes is confirmed (`lib/useAct.ts`): raised when the revision is
- * stored, and replaced in place, under the same id, once this node applies it.
+ * stored, and replaced in place, under the same id, once this node applies it
+ * or a later activation passes it.
  *
- * A node that refused the revision, or a later activation that passed it,
- * takes the toast away: a refusal is drawn beside the setting it concerns
- * (`components/SettingWriteStatus.tsx`), never in a toast that goes by itself.
+ * A node that refused the revision takes the toast away: the refusal is drawn
+ * beside the setting it concerns (`components/SettingWriteStatus.tsx`), never
+ * in a toast that goes by itself.
  */
 
 import { useEffect, useRef } from "react";
@@ -17,6 +18,9 @@ export const APPLYING_SENTENCE = "Applying it on this node.";
 
 /** What it says once this node runs it, where the screen has nothing more exact to say. */
 export const APPLIED_SENTENCE = "Applied on this node.";
+
+/** What it says once a later activation passed the revision before this node applied it. */
+export const PASSED_SENTENCE = "Saved. A later change has been activated since.";
 
 /** A screen's own words for its save. */
 export interface SavedWords {
@@ -55,6 +59,8 @@ export function useSavedToast(saved: SavedRevision | null, words?: SavedWords): 
         title,
         message: said.current?.applied ?? APPLIED_SENTENCE,
       });
+    } else if (standing === "passed") {
+      toast.show({ id, variant: "info", title, message: PASSED_SENTENCE });
     } else {
       toast.dismiss(id);
     }
