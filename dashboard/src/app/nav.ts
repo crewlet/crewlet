@@ -150,6 +150,9 @@ export type SectionRenderer = "tabs" | "lenses" | "column" | "panel" | "none";
  */
 export type SidebarPlace = "you" | "company" | "workspace" | "foot" | "menu";
 
+/** Ask Crewlet's glyph, its sidebar row's and its Settings section's alike. */
+export const ASK_CREWLET_GLYPH: GlyphName = "wand-sparkles";
+
 /**
  * The sidebar's labelled groups, in the order they are drawn, the words over
  * each, and a named group's glyph: the ONE tile the compact sidebar folds the
@@ -541,7 +544,7 @@ export const WORKSPACES: WorkspaceRow[] = [
   {
     key: "ask",
     label: "Ask Crewlet",
-    icon: "wand-sparkles",
+    icon: ASK_CREWLET_GLYPH,
     path: ["ask"],
     hint: "Ask about anything in the engine, and have it make the changes you approve",
     keywords: ["assistant", "chat", "conversations", "question", "answer"],
@@ -1238,7 +1241,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         // reads the company's, which an admin changes.
         key: "ask-crewlet",
         label: "Ask Crewlet",
-        icon: "message-square",
+        icon: ASK_CREWLET_GLYPH,
         path: ["settings", "ask-crewlet"],
         hint: "How Ask Crewlet writes: the company's instructions and your own",
         keywords: ["assistant", "instructions", "tone", "length", "tldr", "style", "answers"],

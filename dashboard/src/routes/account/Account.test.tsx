@@ -28,6 +28,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { toastText } from "~/testing.tsx";
 
 import { Account, passwordState } from "./Account.tsx";
 import { fmtDate, fmtDateTime } from "~/lib/format.ts";
@@ -405,8 +406,10 @@ describe("changing the password", () => {
     expect(screen.queryByLabelText("Code")).toBeNull();
     const before = sessionReads();
     await fill("the old long passphrase", "a brand new long passphrase");
-    expect(await screen.findByText("Password changed. Signed out everywhere else.")).toBeDefined();
-    expect(screen.getByText("Password changed. Signed out everywhere else.")).toBeDefined();
+    // SAID BY ITS TOAST, and the dialog closes: no success line is left in it.
+    await waitFor(() => expect(toastText()).toContain("Signed out everywhere else."));
+    expect(toastText()).toContain("Password changed");
+    expect(screen.queryByRole("dialog", { name: "Change password" })).toBeNull();
     expect(engineIs.writes()).toHaveLength(1);
     expect(engineIs.writes()[0]!.body).toEqual({
       current_password: "the old long passphrase",
@@ -517,7 +520,7 @@ describe("changing the password while holding a second factor", () => {
     expect(await screen.findByLabelText("Code")).toBeDefined();
     expect(screen.getByText("The current code from your app, or a recovery code.")).toBeDefined();
     await fill(" 123456 ");
-    expect(await screen.findByText("Password changed. Signed out everywhere else.")).toBeDefined();
+    await waitFor(() => expect(toastText()).toContain("Signed out everywhere else."));
     expect(engineIs.writes()).toHaveLength(1);
     expect(engineIs.writes()[0]!.body).toEqual({
       current_password: "the old long passphrase",

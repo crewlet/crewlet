@@ -89,6 +89,15 @@ describe("a record this node has not applied", () => {
     expect(report.note).toMatch(/not shown here yet/i);
   });
 
+  // WHERE IT WILL SHOW: a start's in the reader's rooms, a change to a room in
+  // that room. "Your rooms will update" said over a topic change named the
+  // wrong place.
+  test("says where it will show once this node applies it", () => {
+    expect(reportFor("join", answered("pending")).note).toMatch(/Your rooms will update/);
+    expect(reportFor("topic", answered("pending")).note).toMatch(/The room will update/);
+    expect(reportFor("members", answered("pending")).note).toMatch(/The room will update/);
+  });
+
   test("is drawn as information and never as success", () => {
     expect(reportFor("channel", answered("pending")).tone).toBe("pending");
     expect(calloutFor("pending")).toBe("info");

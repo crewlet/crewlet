@@ -114,7 +114,7 @@ import { keptFor } from "./roomLifecycle.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { SharedList } from "./Shared.tsx";
 import { reportFor, type StartReport } from "./start.ts";
-import { StartNote } from "./StartNote.tsx";
+import { StartNote, useSayPending } from "./StartNote.tsx";
 
 const TAB_LABEL: Record<DetailsTab, string> = {
   about: "About",
@@ -337,6 +337,7 @@ function LeaveRow({ answer }: { answer: ChatChannelDetail }) {
   const toast = useToast();
   const leave = useAct("leave_channel");
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   const channel = answer.channel;
   const offered =
     answer.member &&
@@ -358,7 +359,7 @@ function LeaveRow({ answer }: { answer: ChatChannelDetail }) {
       nav.go({ kind: "activity" });
       return;
     }
-    setReport(answered);
+    setReport(say(answered));
   }
 
   return (
@@ -519,7 +520,8 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
     );
     if (result === null) return;
     const answered = reportFor("following", result);
-    if (answered.tone !== "success") setReport(answered);
+    // A PENDING ANSWER IS THE WRITE'S OWN TOAST (`lib/useAct.ts`).
+    if (answered.tone !== "success" && answered.tone !== "pending") setReport(answered);
   }
 
   return (

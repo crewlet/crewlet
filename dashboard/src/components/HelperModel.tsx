@@ -12,11 +12,12 @@
  */
 
 import { useEffect, useState } from "react";
-import { Select, VisuallyHidden, type SelectOption } from "@crewlethq/ui";
+import { Select, type SelectOption } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { documentLimit } from "~/lib/limits.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
-import { SettingWriteStatus, standingWords } from "./SettingWriteStatus.tsx";
+import type { SavedWords } from "~/lib/savedToast.ts";
+import { SettingWriteStatus } from "./SettingWriteStatus.tsx";
 
 /** The two helpers, by the block of the company document each is set in. */
 export type Helper = "assistant" | "advisor";
@@ -85,9 +86,12 @@ export function HelperModel({
   onPending,
 }: HelperModelProps) {
   const { name } = HELPERS[helper];
+  // THE SAVE'S TOAST NAMES THE PICK, worded when it is confirmed.
+  const [said, setSaid] = useState<SavedWords | undefined>(undefined);
   const write = useSettingWrite({
     reread: `Reload to see ${name}'s model as it is now.`,
     onApplied,
+    said,
   });
   // THE CHOICE SHOWS AT ONCE: the stored value is read back only once the write is applied.
   const [chosen, setChosen] = useState<string | null | undefined>(undefined);
@@ -139,6 +143,12 @@ export function HelperModel({
           onClose={() => ask(null)}
           onConfirm={() => {
             setChosen(asked.value);
+            setSaid({
+              done:
+                asked.value === null
+                  ? `${name} has no model now`
+                  : `${name} now runs on ${wordOf(asked.value)}`,
+            });
             write.submit(helperModelPlan(helper, asked.value));
             ask(null);
           }}
@@ -172,17 +182,6 @@ export function HelperModel({
         />
       ) : null}
       <SettingWriteStatus write={write} onReload={onApplied} answersWarning />
-      {/* THE PICKER SHOWS THE NEW VALUE; a screen reader is told it was saved. */}
-      {write.state.kind === "saved" ? (
-        <VisuallyHidden>
-          <span role="status">
-            {held === null ? `${name} has no model now` : `${name} now runs on ${wordOf(held)}`}
-            {write.state.standing === "applied" || write.state.standing === "passed"
-              ? "."
-              : `, ${standingWords(write.state.standing)}`}
-          </span>
-        </VisuallyHidden>
-      ) : null}
     </span>
   );
 }

@@ -44,7 +44,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import { issueReportsPlan } from "~/lib/diagnosticsSettings.ts";
 import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import { marked } from "~/ui/Problems.tsx";
@@ -201,11 +201,6 @@ function ReportsSwitch({
     onWanted(on);
     write.submit(issueReportsPlan(on));
   };
-  const saved = state.kind === "saved" ? state : null;
-  const mark =
-    saved && (saved.standing === "applying" || saved.standing === "refused")
-      ? `Saved, ${standingWords(saved.standing)}`
-      : "";
 
   const shown = wanted ?? answer.enabled;
   return (
@@ -222,19 +217,12 @@ function ReportsSwitch({
           disabledReason={access.can ? undefined : access.reason}
           onCheckedChange={press}
         />
-        {mark && (
-          <span className="t-caption" role="status">
-            {mark}
-          </span>
-        )}
-        {state.kind !== "saved" && (
-          <SettingWriteStatus
-            write={write}
-            unchanged="Already so."
-            onReload={onSaved}
-            answersWarning
-          />
-        )}
+        <SettingWriteStatus
+          write={write}
+          unchanged="Already so."
+          onReload={onSaved}
+          answersWarning
+        />
         {shown && answer.inert && (
           <Callout variant="warning" title="This build won't send reports">
             {INERT_WORDS[answer.inert]}
