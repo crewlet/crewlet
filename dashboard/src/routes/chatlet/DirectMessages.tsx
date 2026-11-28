@@ -76,7 +76,7 @@ function newestFirst(a: ChatChannelSummary, b: ChatChannelSummary): number {
 export function DirectMessagesView() {
   const nav = useChatNav();
   const frame = useChatFrame();
-  const { viewer, nameOf, measured } = frame;
+  const { viewer, nameOf } = frame;
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [query, setQuery] = useState("");
   const listBox = useRef<HTMLDivElement>(null);
@@ -89,12 +89,12 @@ export function DirectMessagesView() {
   const all = frame.channels
     .filter((row) => isDirect(row.channel.kind) && !row.channel.archived_at)
     .sort(newestFirst);
-  const waiting = all.filter((row) => unreadIn(row, measured));
+  const waiting = all.filter((row) => unreadIn(row, frame.waiting));
   // THE OPEN CONVERSATION STAYS IN A FILTERED LIST: reading it is what takes
   // it out of the unread ones, and the list should not lose the row it shows.
   const shown = all.filter(
     (row) =>
-      (!unreadOnly || unreadIn(row, measured) || row.channel.id === open) &&
+      (!unreadOnly || unreadIn(row, frame.waiting) || row.channel.id === open) &&
       finds(query, titleOf(row)),
   );
   const current = all.find((row) => row.channel.id === open) ?? null;
@@ -274,13 +274,13 @@ function ConversationRow({
   onLeft?: (() => void) | undefined;
 }) {
   const frame = useChatFrame();
-  const { viewer, nameOf, measured, starred } = frame;
+  const { viewer, nameOf, starred } = frame;
   const people = useChatPeople();
   const today = useClock(readerDay);
   const group = row.channel.kind === "group";
   const last = row.last;
   const when = last ? listDate(last.at, today) : null;
-  const unread = unreadIn(row, measured);
+  const unread = unreadIn(row, frame.waiting);
   const isStarred = starred.has(row.channel.id);
   // THE LAST WORDS AS SAID, with who said them where it is not plain: the
   // reader's own last word, or a group's.

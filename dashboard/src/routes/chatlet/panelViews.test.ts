@@ -31,7 +31,7 @@ describe("what each view's row carries", () => {
   const none = { count: 0 };
   const quiet = { rows: [] };
 
-  test("Activity is the accent badge of what waits on the reader; the rest are quiet counts", () => {
+  test("Activity and Threads are the accent badge of what waits on the reader; the rest are quiet counts", () => {
     const counts = { activity: 3, threads: 2, saved: 5 };
     expect(viewCount("activity", { counts, drafts: none, outbox: quiet })).toMatchObject({
       value: 3,
@@ -39,7 +39,7 @@ describe("what each view's row carries", () => {
     });
     expect(viewCount("threads", { counts, drafts: none, outbox: quiet })).toMatchObject({
       value: 2,
-      tone: "quiet",
+      tone: "attention",
     });
     expect(viewCount("saved", { counts, drafts: none, outbox: quiet })).toMatchObject({
       value: 5,

@@ -30,6 +30,7 @@ import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   ChipField,
+  Count,
   EmptyState,
   FilterChip,
   IconButton,
@@ -60,6 +61,7 @@ import { usePageCoverage } from "~/app/Shell.tsx";
 import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { useChatWaiting } from "~/lib/chatRooms.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
 import { useRoomNames } from "~/lib/roomNames.ts";
 import { readerDay, relTime } from "~/lib/format.ts";
@@ -342,13 +344,17 @@ export function ActivityView() {
     : null;
 
   const markItem = (item: ChatActivityItem) => {
-    // MARKED READ WHERE IT IS READ: the row's own position, sent as its
-    // room's cursor, which only moves forward.
+    // MARKED READ WHERE IT IS READ: the row's own position, as its thread's
+    // place for a reply (the room's would read every other thread too) and
+    // its room's otherwise. A place only moves forward.
     if (!item.unread || item.read_through === undefined) return;
+    const through = item.read_through;
     void markRead(
       mark,
       store,
-      { cursors: { [item.channel_id]: item.read_through } },
+      item.thread_root
+        ? { thread_cursors: { [item.thread_root]: through } }
+        : { cursors: { [item.channel_id]: through } },
       { done: "Marked as read", quiet: true },
     );
   };
@@ -724,6 +730,7 @@ function ActivityReply({ item }: { item: ChatActivityItem }) {
 export function ThreadsView() {
   const nav = useChatNav();
   const now = useNow();
+  const waiting = useChatWaiting();
   const { socket, store } = useClient();
   const mark = useAct("mark_chat_read");
   const params = { limit: VIEW_PAGE };
@@ -760,6 +767,7 @@ export function ThreadsView() {
             const summary = root.thread;
             const replies = summary?.replies ?? thread.latest.length;
             const hidden = replies - thread.latest.length;
+            const fresh = waiting?.inThread(thread.channel_id, root.message.id) ?? 0;
             const room: RoomRef = {
               id: thread.channel_id,
               kind: thread.channel_kind,
@@ -774,6 +782,13 @@ export function ThreadsView() {
                       · {replies} {replies === 1 ? "reply" : "replies"} · last{" "}
                       {ago(summary?.last_reply_at ?? root.message.created_at, now)}
                     </span>
+                    {fresh > 0 && (
+                      <Count
+                        tone="attention"
+                        value={fresh.toLocaleString()}
+                        label="waiting on you"
+                      />
+                    )}
                   </span>
                   <WriteButton
                     size="small"

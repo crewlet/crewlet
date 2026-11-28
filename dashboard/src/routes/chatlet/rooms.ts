@@ -11,7 +11,7 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { isDirect, roomWaiting } from "~/lib/chatRooms.ts";
+import { isDirect, type ChatWaiting } from "~/lib/chatRooms.ts";
 import type { ChatChannel, ChatChannelSummary, ChatKind } from "~/protocol/index.ts";
 
 /**
@@ -218,7 +218,7 @@ export function sectionRooms(
   opts: {
     options: RoomListOptions;
     starred: ReadonlySet<string>;
-    measured: boolean;
+    waiting: ChatWaiting | null;
     current: string;
     titleOf: (room: ChatChannelSummary) => string;
     /** What the reader typed in the panel's find field, if anything. */
@@ -232,7 +232,7 @@ export function sectionRooms(
     .filter(
       (room) =>
         !opts.options.unreadOnly ||
-        unreadIn(room, opts.measured) ||
+        unreadIn(room, opts.waiting) ||
         room.channel.id === opts.current,
     );
   const ordered =
@@ -272,18 +272,31 @@ export function roomSection(kind: ChatKind, starred: boolean): RoomSection {
 
 /**
  * What waits on the reader in a room, as the accent badge counts it
- * (`lib/chatRooms.ts`'s `roomWaiting`, the sidebar's rule), or nothing where
- * nothing was measured: a rail with no read state behind it zeroes every
- * count, and a zero drawn from that is a claim that nothing waits.
+ * (`lib/chatRooms.ts`'s `ChatWaiting`, the sidebar's count), or nothing where
+ * nothing was measured: a rail with no read state behind it has no figure.
  */
-export function waitingIn(room: ChatChannelSummary, measured: boolean): number {
-  return measured ? roomWaiting(room) : 0;
+export function waitingIn(room: ChatChannelSummary, waiting: ChatWaiting | null): number {
+  return waiting?.inRoom(room.channel.id) ?? 0;
+}
+
+/** A room's waiting figure as its badge writes it: "N+" where the engine's
+ *  count of the room stopped at its window. */
+export function waitingLabel(
+  room: ChatChannelSummary,
+  count: number,
+  waiting: ChatWaiting | null,
+): string {
+  return waiting?.floorIn(room.channel.id) ? `${count}+` : String(count);
 }
 
 /**
- * Whether a room has unread messages the reader has not silenced, which is
- * what sets its row in the primary ink and the medium weight.
+ * Whether a room has unread messages the reader has not silenced (room posts,
+ * or replies waiting on them), which sets its row in the primary ink and the
+ * medium weight, keeps it under Unread and is where the unread step lands.
+ * Nothing where nothing was measured (`waiting` null).
  */
-export function unreadIn(room: ChatChannelSummary, measured: boolean): boolean {
-  return measured && !room.muted && room.unread > 0;
+export function unreadIn(room: ChatChannelSummary, waiting: ChatWaiting | null): boolean {
+  return (
+    waiting !== null && !room.muted && (room.unread > 0 || waiting.inRoom(room.channel.id) > 0)
+  );
 }

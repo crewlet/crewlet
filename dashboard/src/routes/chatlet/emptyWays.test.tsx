@@ -36,7 +36,8 @@ test("a narrowed search with no match offers Search every room, which widens it"
         return { hits: [], searched: 1, read_level: "session", position: SERVED.position };
       }
       if (what === "chat_rooms") return ROOMS;
-      if (what === "chat_channels") return { ...SERVED, read_state: true, channels: [] };
+      if (what === "chat_channels")
+        return { ...SERVED, read_state: true, waiting: [], waiting_capped: false, channels: [] };
       return {};
     },
   });
@@ -60,6 +61,8 @@ test("Activity filtered to Unread and empty offers Show everything", async () =>
         return {
           ...SERVED,
           read_state: true,
+          waiting: [],
+          waiting_capped: false,
           channels: [
             {
               channel: { v: 1, id: "room-1", kind: "public", name: "launch", created_at: "" },

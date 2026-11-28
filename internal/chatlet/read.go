@@ -355,17 +355,22 @@ func directory(ctx context.Context, tx *sql.Tx, who string) (Directory, error) {
 
 // ChannelsQuery asks for one person's channel list.
 type ChannelsQuery struct {
-	// Cursors is the viewer's own read state: a channel id against the
-	// PACKED position they have read through, exactly as
-	// [github.com/crewlet/crewlet/internal/coord.ChatReadState] holds it.
+	// Marks is the viewer's own read state, as [ActivityQuery.Marks]: the
+	// room cursors the unread counts are measured from, and what
+	// [ChannelsQuery.Waiting] is counted against.
 	//
 	// IT IS A VALUE RATHER THAN A LOOKUP. Read state is the one piece of
 	// chat state that is not on this log — it is a fact about one person's
 	// attention that nobody replays — so it reaches this read from the
 	// caller that already had to fetch it for the mute list and the
-	// do-not-disturb window. An absent entry is a room this person has
+	// do-not-disturb window. An absent cursor is a room this person has
 	// never opened, whose whole tail is unread.
-	Cursors map[string]int64
+	Marks ReaderMarks
+
+	// Waiting asks for [ChannelListing.Waiting], counted only over a record
+	// that was read ([ReaderMarks.Known]). Ignored with [ChannelsQuery.With],
+	// whose rooms are two seats' shared ones, not the reader's rail.
+	Waiting bool
 
 	// IncludeArchived keeps rooms that were closed to new messages. Off by
 	// default: an archived room is readable for ever and belongs in a
@@ -374,9 +379,9 @@ type ChannelsQuery struct {
 	IncludeArchived bool
 
 	// Unread keeps only the rooms with messages above the viewer's cursor.
-	// It reads [ChannelsQuery.Cursors] as a MEASUREMENT: with none, every
-	// room's whole tail counts as unread, so a caller that could not read
-	// the person's read state must not ask for it.
+	// It reads the cursors in [ChannelsQuery.Marks] as a MEASUREMENT: with
+	// none, every room's whole tail counts as unread, so a caller that could
+	// not read the person's read state must not ask for it.
 	Unread bool
 
 	// With keeps only the rooms this seat is ALSO a member of: the rooms
@@ -385,7 +390,7 @@ type ChannelsQuery struct {
 	With string
 
 	// Starred is the rooms the viewer starred, from the same read state as
-	// [ChannelsQuery.Cursors]. A star is a person keeping a room in the
+	// [ChannelsQuery.Marks]. A star is a person keeping a room in the
 	// list they work out of, so a starred room they may READ and are not in
 	// is listed beside the rooms they are in ([ChannelSummary.Member] says
 	// which): a team's room is readable by every seat and joined only by
@@ -466,15 +471,6 @@ type ChannelSummary struct {
 	// rendering "100" cannot mean two different things by it.
 	UnreadCapped bool `json:"unread_capped,omitempty"`
 
-	// Mentions is how many of the Unread messages name this viewer or the
-	// whole room (`@channel`): the badge that says somebody is asking for
-	// them. Counted over the same messages as Unread, so it is never more
-	// than Unread and stops where UnreadCapped says that did. A room event
-	// names nobody, and a muted room is counted all the same: the mute
-	// silences the badge on the screen, and the screen is where it is
-	// applied.
-	Mentions int `json:"mentions"`
-
 	// Last is the newest message, or nil in a room where nothing has been
 	// said yet.
 	Last *MessagePreview `json:"last,omitempty"`
@@ -506,6 +502,15 @@ type ChannelListing struct {
 	// who can see a room missing from a list, and refusing the whole rail
 	// over one row would cost a person every other room they are in.
 	Unreadable int `json:"unreadable,omitempty"`
+
+	// Waiting is what waits on the reader, place by place, when the query
+	// asked ([ChannelsQuery.Waiting]): over every room they may read, listed
+	// here or not, before the listing's `Unread` and `Limit` cuts.
+	Waiting []Waiting `json:"waiting"`
+
+	// WaitingCapped says a count in Waiting stopped at [UnreadLimit], so
+	// their sum is a floor.
+	WaitingCapped bool `json:"waiting_capped"`
 }
 
 // Channels answers one person's channel list.
@@ -531,7 +536,15 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 		func(tx *sql.Tx) error {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			var err error
-			out, err = r.rail(ctx, tx, who, q)
+			if out, err = r.rail(ctx, tx, who, q); err != nil {
+				return err
+			}
+			// OVER EVERY ROOM, listed or not: a reader in no room may still be
+			// named in one.
+			if q.Waiting && q.Marks.Known && strings.TrimSpace(q.With) == "" {
+				out.Waiting, out.WaitingCapped, err = railWaiting(ctx, tx, who, q.Marks,
+					out.Channels)
+			}
 			return err
 		})
 	if err != nil {
@@ -812,8 +825,8 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 		if err != nil {
 			return ChannelListing{}, err
 		}
-		summary.Unread, summary.UnreadCapped, summary.Mentions, err = unreadCount(
-			ctx, tx, id, who, q.Cursors[id], summary.Last)
+		summary.Unread, summary.UnreadCapped, err = unreadCount(
+			ctx, tx, id, who, q.Marks.Cursors[id], summary.Last)
 		if err != nil {
 			return ChannelListing{}, err
 		}
@@ -1033,6 +1046,22 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 	return &preview, nil
 }
 
+// railWaiting is [ChannelListing.Waiting] ([waiting]), over the rooms' newest
+// messages the rail has already read.
+func railWaiting(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
+	rooms []ChannelSummary) ([]Waiting, bool, error) {
+
+	known := make(map[string]*MessagePreview, len(rooms))
+	for _, room := range rooms {
+		known[room.Channel.ID] = room.Last
+	}
+	t, err := waiting(ctx, tx, who, marks, known)
+	if err != nil {
+		return nil, false, err
+	}
+	return t.list(), t.capped, nil
+}
+
 // unreadCount is the counted range above one person's cursor in one room.
 //
 // The cursor is a POSITION, the transcript ordered by SEQUENCE; they meet only
@@ -1041,37 +1070,31 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 // newest [UnreadLimit] because `version > cursor` in sequence order would walk
 // the whole room. Your own messages, tombstones, events and thread replies are
 // excluded: a badge reading cannot clear trains people to ignore the rail.
-// Mentions (`chat_mentions` or `collective`) join as a LEFT JOIN, not a
-// correlated EXISTS the driver may decorrelate over every mention in the
-// company ([storetest.Decorrelated]).
 func unreadCount(ctx context.Context, tx *sql.Tx, channelID, who string,
-	cursor int64, last *MessagePreview) (unread int, capped bool, mentions int, err error) {
+	cursor int64, last *MessagePreview) (unread int, capped bool, err error) {
 
 	if last == nil || last.Position.Packed() <= cursor {
-		return 0, false, 0, nil
+		return 0, false, nil
 	}
 	err = tx.QueryRowContext(ctx, unreadStatement,
-		channelID, UnreadLimit, who, cursor, who).Scan(&unread, &mentions)
+		channelID, UnreadLimit, cursor, who).Scan(&unread)
 	if err != nil {
-		return 0, false, 0, fmt.Errorf("chatlet: count what %s has not read in "+
+		return 0, false, fmt.Errorf("chatlet: count what %s has not read in "+
 			"room %s: %w", who, channelID, err)
 	}
-	return unread, unread >= UnreadLimit, mentions, nil
+	return unread, unread >= UnreadLimit, nil
 }
 
 // unreadStatement is [unreadCount]'s one statement: the room's newest
 // messages, those above the cursor that somebody else wrote and nobody took
-// back, and of those the ones naming the reader or the room.
+// back.
 const unreadStatement = `
-	SELECT COUNT(*),
-	       COALESCE(SUM(CASE WHEN t.collective = 1 OR n.handle IS NOT NULL
-	                         THEN 1 ELSE 0 END), 0)
-	  FROM (SELECT id, version, author_handle, author_kind, deleted_at, collective
+	SELECT COUNT(*)
+	  FROM (SELECT version, author_handle, author_kind, deleted_at
 	          FROM chat_messages
 	         WHERE channel_id = ? AND event = '' AND thread_root = ''
 	         ORDER BY channel_seq DESC
 	         LIMIT ?) t
-	  LEFT JOIN chat_mentions n ON n.message_id = t.id AND n.handle = ?
 	 WHERE t.version > ? AND (t.author_handle <> ? OR t.author_kind = '` + string(AuthorSystem) + `')
 	   AND t.deleted_at IS NULL`
 

@@ -11,6 +11,7 @@
 
 import { useMemo, useState } from "react";
 
+import { ChatRoomsProvider, useChatRooms, useChatWaiting } from "~/lib/chatRooms.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
 import type { ReadCursors } from "./cursor.ts";
@@ -38,14 +39,25 @@ export interface LoneRoomProbe {
   stars?: { room: string; on: boolean }[];
 }
 
+type LoneRoomProps = Parameters<typeof RoomInFrame>[0];
+
 /**
  * A room mounted on its own, inside the frame the chat screen holds above
- * every room (`Chat.tsx`): its navigation, the outbox, the cursor writer, the
+ * every room (`Chat.tsx`): the app frame's one reading of the reader's rooms
+ * (`lib/chatRooms.ts`), its navigation, the outbox, the cursor writer, the
  * drafts and the open room's detail, read once here as the frame reads it.
  * What the frame does is the frame's suite's; this is what a suite about one
  * room needs, and no second idea of what any of it is.
  */
-export function LoneRoom({
+export function LoneRoom(props: LoneRoomProps) {
+  return (
+    <ChatRoomsProvider>
+      <RoomInFrame {...props} />
+    </ChatRoomsProvider>
+  );
+}
+
+function RoomInFrame({
   channelID,
   viewer,
   nameOf,
@@ -75,7 +87,8 @@ export function LoneRoom({
   if (probe) probe.nav = shown;
   const detail = useQuery("chat_channel", { channel_id: channelID });
   useChatFrames(channelID, () => detail.refetch());
-  const rail = useQuery("chat_channels", {});
+  const rail = useChatRooms();
+  const waiting = useChatWaiting();
   const channels = useMemo(() => rail.data?.channels ?? [], [rail.data]);
   const summary = channels.find((row) => row.channel.id === channelID);
   const open = useMemo<OpenRoom>(() => {
@@ -99,6 +112,7 @@ export function LoneRoom({
       rail,
       channels,
       measured: true,
+      waiting,
       outbox,
       cursors,
       markRead: (room, through) => probe?.marked.push({ room, through }),
@@ -111,7 +125,7 @@ export function LoneRoom({
       list: DEFAULT_LIST_OPTIONS,
       setList: () => {},
     }),
-    [viewer, nameOf, rail, channels, outbox, cursors, probe],
+    [viewer, nameOf, rail, channels, waiting, outbox, cursors, probe],
   );
   return (
     <ChatNavProvider value={shown}>

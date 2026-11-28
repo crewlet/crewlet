@@ -57,8 +57,8 @@ import {
   SECTION_GLYPH,
   sectionRooms,
   unreadIn,
-  unreadLabel,
   waitingIn,
+  waitingLabel,
   type RoomSection,
 } from "./rooms.ts";
 import { PANEL_VIEWS, viewCount } from "./panelViews.ts";
@@ -138,7 +138,7 @@ function ViewItems({ pick }: { pick: Pick }) {
 /** The rooms, in their sections. */
 function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
   const nav = useChatNav();
-  const { channels, measured, viewer, nameOf, starred, list: options } = useChatFrame();
+  const { channels, waiting, viewer, nameOf, starred, list: options } = useChatFrame();
   const create = useWriteAccess("create_channel");
   const [collapsed, setCollapsed] = useState<Partial<Record<RoomSection, boolean>>>({});
   const current = openRoomOf(nav.place);
@@ -148,7 +148,7 @@ function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
   const sections = sectionRooms(channels, {
     options,
     starred,
-    measured,
+    waiting,
     current,
     titleOf,
     filter,
@@ -216,7 +216,6 @@ function RoomSections({ filter, pick }: { filter: string; pick: Pick }) {
               room={room}
               title={titleOf(room)}
               current={room.channel.id === current}
-              measured={measured}
               pick={pick}
             />
           ))}
@@ -231,21 +230,19 @@ function RoomItem({
   room,
   title,
   current,
-  measured,
   pick,
 }: {
   room: ChatChannelSummary;
   title: string;
   current: boolean;
-  measured: boolean;
   pick: Pick;
 }) {
   const nav = useChatNav();
   const drafts = useChatDrafts();
   const people = useChatPeople();
-  const { viewer } = useChatFrame();
+  const { viewer, waiting: counts } = useChatFrame();
   const id = room.channel.id;
-  const waiting = waitingIn(room, measured);
+  const waiting = waitingIn(room, counts);
   const muted = room.muted === true;
   // A DRAFT SHOWS WHERE THE READER IS NOT: in the open room the words are in
   // the box in front of them.
@@ -267,7 +264,7 @@ function RoomItem({
       icon={<RoomMark room={room} />}
       href={nav.hrefOf(place)}
       current={current}
-      unread={unreadIn(room, measured)}
+      unread={unreadIn(room, counts)}
       muted={muted}
       title={doing ? `${title}. ${doing}` : title}
       onClick={(event) => {
@@ -277,7 +274,7 @@ function RoomItem({
       {...(waiting > 0
         ? {
             badge: {
-              value: unreadLabel(waiting, room.unread_capped),
+              value: waitingLabel(room, waiting, counts),
               label: isDirect(room.channel.kind) ? "unread" : "for you",
             },
           }

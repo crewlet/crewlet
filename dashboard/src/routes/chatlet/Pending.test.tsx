@@ -74,7 +74,15 @@ function mountRow(row: Outgoing, connected = true) {
       // AS DRAFTS AND SENT DRAWS IT, so the room's rules are this detail's.
       hash: "#/chatlet/drafts",
       connected,
-      answers: { chat_channels: { ...SERVED, read_state: true, channels: [] } } as never,
+      answers: {
+        chat_channels: {
+          ...SERVED,
+          read_state: true,
+          waiting: [],
+          waiting_capped: false,
+          channels: [],
+        },
+      } as never,
     },
   );
 }

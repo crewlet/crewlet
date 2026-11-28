@@ -45,7 +45,10 @@ func readerMarks(state coord.ChatReadState, measured bool) chatlet.ReaderMarks {
 		return chatlet.ReaderMarks{}
 	}
 	marks := chatlet.ReaderMarks{Known: true, Cursors: state.Cursors,
-		ThreadCursors: state.ThreadCursors}
+		ThreadCursors: state.ThreadCursors, Muted: make(map[string]bool, len(state.Muted))}
+	for _, id := range state.Muted {
+		marks.Muted[id] = true
+	}
 	for _, m := range state.Threads {
 		ref := chatlet.ThreadRef{ChannelID: m.ChannelID, RootID: m.RootID}
 		if m.Following {

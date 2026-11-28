@@ -294,22 +294,22 @@ func TestARoomEventIsNotConversation(t *testing.T) {
 	if len(rail.Channels) != 1 {
 		t.Fatalf("bob's rail holds %d rooms, want 1", len(rail.Channels))
 	}
-	if got := rail.Channels[0]; got.Unread != 0 || got.Mentions != 0 || got.Last != nil {
-		t.Errorf("a room holding only its opening line reads unread %d, mentions %d, "+
-			"last %+v, want nothing: a line nobody said is no badge and no preview",
-			got.Unread, got.Mentions, got.Last)
+	if got := rail.Channels[0]; got.Unread != 0 || got.Last != nil {
+		t.Errorf("a room holding only its opening line reads unread %d, last %+v, "+
+			"want nothing: a line nobody said is no badge and no preview",
+			got.Unread, got.Last)
 	}
 }
 
-// THE MENTION COUNT IS THE UNREAD ROOM POSTS THAT ASK FOR THE READER: those
-// that name them and those that name the whole room, never their own, never one
-// taken back and never a reply, which is read in its thread, counted over the
-// same posts as the unread count.
+// WHAT WAITS ON THE READER IS COUNTED WHERE IT WAITS: the room posts that name
+// them or the whole room, and a reply naming them in its thread, never their
+// own and never one taken back. The unread count is every room post somebody
+// else said.
 //
-// Mutation: drop `t.collective = 1` from the count and the `@channel` message
-// is not counted; drop the LEFT JOIN's handle and every mention in the room
-// counts for everybody.
-func TestTheMentionCountIsWhatAsksForTheReader(t *testing.T) {
+// Mutation: drop the collective source and the `@channel` post is not
+// counted; drop the mention source's handle and every mention counts for
+// everybody.
+func TestWhatWaitsOnTheReaderIsCountedWhereItWaits(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane", "bob"))
 	room := r.room(person("jane"), "launch", "bob")
@@ -336,7 +336,7 @@ func TestTheMentionCountIsWhatAsksForTheReader(t *testing.T) {
 	r.drain()
 	post(person("bob"), "k-5", chatlet.NewMessage{Body: "@bob note to self",
 		Mentions: []string{"bob"}})
-	// A REPLY IS READ IN ITS THREAD, mention and all: it badges neither count.
+	// A REPLY NAMING HIM WAITS IN ITS THREAD, not among the room's posts.
 	if _, err := r.store.Reply(t.Context(), keyed(person("jane"), requested("k-6")), id,
 		taken.Message.ID, chatlet.NewMessage{Body: "@bob in the thread",
 			Mentions: []string{"bob"}}); err != nil {
@@ -344,25 +344,28 @@ func TestTheMentionCountIsWhatAsksForTheReader(t *testing.T) {
 	}
 	r.drain()
 
-	rail, err := r.reader().Channels(t.Context(), "bob", chatlet.ChannelsQuery{},
+	asked := chatlet.ChannelsQuery{Marks: chatlet.ReaderMarks{Known: true}, Waiting: true}
+	rail, err := r.reader().Channels(t.Context(), "bob", asked,
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read bob's rail: %v", err)
 	}
-	got := rail.Channels[0]
-	if got.Unread != 3 || got.Mentions != 2 {
-		t.Errorf("bob's badge reads unread %d, mentions %d, want 3 and 2: three "+
+	want := []chatlet.Waiting{{ChannelID: id, Count: 2},
+		{ChannelID: id, RootID: taken.Message.ID, Count: 1}}
+	if got := rail.Channels[0].Unread; got != 3 || !slices.Equal(rail.Waiting, want) {
+		t.Errorf("bob's rail reads unread %d, waiting %+v, want 3 and %+v: three "+
 			"room posts somebody else said and nobody took back, one naming him and "+
-			"one naming the room; the reply naming him is read in its thread",
-			got.Unread, got.Mentions)
+			"one naming the room, and the reply naming him in its thread",
+			got, rail.Waiting, want)
 	}
-	jane, err := r.reader().Channels(t.Context(), "jane", chatlet.ChannelsQuery{},
+	jane, err := r.reader().Channels(t.Context(), "jane", asked,
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read jane's rail: %v", err)
 	}
-	if m := jane.Channels[0].Mentions; m != 0 {
-		t.Errorf("jane's mention count is %d, want 0: bob's note named only bob", m)
+	if len(jane.Waiting) != 0 {
+		t.Errorf("jane's rail has %+v waiting, want nothing: bob's note named only bob",
+			jane.Waiting)
 	}
 }
 

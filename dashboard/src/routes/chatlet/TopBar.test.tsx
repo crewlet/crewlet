@@ -52,8 +52,10 @@ const answers = {
   chat_channels: {
     ...SERVED,
     read_state: true,
+    waiting: [],
+    waiting_capped: false,
     read: { handle: "ada", revision: 1, cursors: {} },
-    channels: [{ channel, revision: 1, unread: 0, mentions: 0 }],
+    channels: [{ channel, revision: 1, unread: 0 }],
   },
   chat_channel: {
     ...SERVED,
@@ -177,7 +179,8 @@ test("Menu draws what waits as a count apart from its word", async () => {
       ...answers,
       chat_channels: {
         ...answers.chat_channels,
-        channels: [{ channel, revision: 1, unread: 3, mentions: 3 }],
+        channels: [{ channel, revision: 1, unread: 3 }],
+        waiting: [{ channel_id: channel.id, root_id: "", count: 3, capped: false }],
       },
     },
   });
@@ -243,7 +246,7 @@ describe("the Rooms switcher names the open room", () => {
       </RoomScopeProvider>,
       {
         hash: `#/chatlet/${TEAM}`,
-        answers: opened(team as never, false, [{ channel, revision: 1, unread: 0, mentions: 0 }]),
+        answers: opened(team as never, false, [{ channel, revision: 1, unread: 0 }]),
       },
     );
     await waitFor(async () => expect((await trigger()).textContent).toMatch(/platform/i));
@@ -258,8 +261,8 @@ describe("the Rooms switcher names the open room", () => {
       {
         hash: `#/chatlet/${ARCHIVED}`,
         answers: opened(archived, true, [
-          { channel: archived, revision: 1, unread: 0, mentions: 0 },
-          { channel, revision: 1, unread: 0, mentions: 0 },
+          { channel: archived, revision: 1, unread: 0 },
+          { channel, revision: 1, unread: 0 },
         ]),
       },
     );

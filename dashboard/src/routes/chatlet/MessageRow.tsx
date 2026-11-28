@@ -55,6 +55,7 @@ import {
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { matchesRow } from "~/app/keymap.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
+import { useChatWaiting } from "~/lib/chatRooms.ts";
 import { useClock } from "~/lib/clock.ts";
 import { fmtDateTimeFull, relTime } from "~/lib/format.ts";
 import { copyLink, copyText } from "~/lib/pageLink.ts";
@@ -167,6 +168,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     where === "room" && view.thread ? cursors.threadSeen(view.message.id) : 0,
   );
   const threadRead = Math.max(threadReadHeld, threadSeen);
+  const waiting = useChatWaiting();
   const toast = useToast();
   const assistant = useAssistantControl();
   // THE THREAD LINE'S AGE, read as its words: the row renders when "5m ago"
@@ -407,8 +409,12 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
     );
 
   const thread = where === "room" ? view.thread : undefined;
+  // THE THREAD'S WAITING REPLIES, the sidebar's count for this thread, gone
+  // at once where this tab has read past its newest reply.
   const newReplies =
-    thread && !threadOpen && (packPosition(thread.last_reply_position) ?? 0) > threadRead;
+    thread && !threadOpen && (packPosition(thread.last_reply_position) ?? 0) > threadRead
+      ? (waiting?.inThread(scope.channelID, message.id) ?? 0)
+      : 0;
   const answering = working.filter((seat) => seat.thread === message.id);
   // EVERY SEAT ANSWERING, on one line. While the thread is open beside the
   // room, the pane's own line announces them, so this one stays quiet.
@@ -446,7 +452,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           replies={thread.replies}
           participants={thread.repliers.map((handle) => stackMember(names.person(handle)))}
           last={lastReply}
-          unread={newReplies ? 1 : 0}
+          unread={newReplies}
           open={threadOpen}
           onOpen={openThread}
           working={answeringLine}

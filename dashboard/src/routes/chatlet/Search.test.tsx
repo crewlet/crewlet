@@ -63,7 +63,8 @@ function mount(q: string, answer?: (what: string, params?: Record<string, unknow
       if (answer) return answer(what, params);
       if (what === "chat_search") return ANSWER([hit("m-1", "bo", "the date moved to Thursday")]);
       if (what === "chat_rooms") return ROOMS;
-      if (what === "chat_channels") return { ...SERVED, read_state: true, channels: [] };
+      if (what === "chat_channels")
+        return { ...SERVED, read_state: true, waiting: [], waiting_capped: false, channels: [] };
       return {};
     },
   });

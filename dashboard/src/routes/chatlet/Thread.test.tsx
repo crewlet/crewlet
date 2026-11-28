@@ -71,7 +71,13 @@ beforeEach(() => {
   answers = {
     chat_channel: DETAIL,
     chat_thread: THREAD,
-    chat_channels: { ...SERVED, read_state: true, channels: [] },
+    chat_channels: {
+      ...SERVED,
+      read_state: true,
+      waiting: [],
+      waiting_capped: false,
+      channels: [],
+    },
   };
 });
 

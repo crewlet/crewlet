@@ -319,3 +319,42 @@ func TestAMessageToTheWholeRoomIsAMentionOfItsMembers(t *testing.T) {
 		}
 	}
 }
+
+// A MESSAGE IS LISTED ONCE, AND NEVER ONE THE READER WROTE: a reply naming the
+// whole room in a thread they spoke in is the mention, not also a reply; a
+// message naming them and the room is one mention; their own note naming
+// themself is not news.
+//
+// Mutation: drop the collective exclusion from the reply source, or the named
+// exclusion from the collective source, and a message is listed twice; drop
+// the author filter from the mention source and jane's own note is listed.
+func TestAMessageIsListedOnceAndNeverTheReadersOwn(t *testing.T) {
+	t.Parallel()
+	h := activityWorld(t)
+	post := func(id, root, author, body string, collective bool, mentions ...string) {
+		h.apply(readRecord(chatlet.MessageSubject("room-pub"), chatlet.OpPost,
+			"op-post-"+id, chatlet.MessagePost{V: chatlet.DocumentVersion, MessageID: id,
+				Body: body, ThreadRoot: root, Author: author,
+				AuthorKind: chatlet.AuthorHuman, Mentions: mentions, Collective: collective},
+			chatlet.ScopeSet{Subject: true}, author))
+	}
+	post("all-reply", "root-a", "ada", "@channel the release is out", true)
+	post("both", "", "ada", "@channel @jane standup moved", true, "jane")
+	post("self", "", "jane", "@jane remember the notes", false, "jane")
+	got, err := h.reader().Activity(t.Context(), "jane",
+		chatlet.ActivityQuery{Marks: chatlet.ReaderMarks{Known: true}}, h.session())
+	if err != nil {
+		t.Fatalf("Activity: %v", err)
+	}
+	listed := map[string][]chatlet.ActivityKind{}
+	for _, item := range got.Items {
+		listed[item.MessageID] = append(listed[item.MessageID], item.Kind)
+	}
+	for id, want := range map[string][]chatlet.ActivityKind{
+		"all-reply": {chatlet.ActivityMention}, "both": {chatlet.ActivityMention}, "self": nil,
+	} {
+		if !slices.Equal(listed[id], want) {
+			t.Errorf("%s is listed as %v, want %v", id, listed[id], want)
+		}
+	}
+}

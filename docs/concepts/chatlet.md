@@ -166,7 +166,7 @@ A person in chat is somebody in the identity directory acting as their human sea
 
 It is written through the operator surface's `mark_chat_read`, like every dashboard gesture, and every node that serves sockets **watches** those records, so a flush that lands is pushed to the seat's open screens wherever attached. It is derived from the record itself (no message for a peer to forge), and a second tab on another ingress node clears its badge with the first. Each pushed state carries the revision the record stands at and a screen keeps the highest, so out-of-order pushes cannot restore an older state. A flush whose answer was lost may have landed: it answers `unknown`, safe to repeat because a cursor only moves forward, and the watch pushes the record as it stands. A mute is per room, not a list: a flush mutes or unmutes the rooms it names and every other keeps its state, so a screen mutes its room without reading what else is muted, and two tabs muting two rooms both land.
 
-The same surface's `list_channels` counts each room's unread room posts (a reply is read in its thread, so does not badge the room), how many name the person or the whole room (`@channel`), and marks the seat's muted rooms and a do-not-disturb its person is in, so their assistant sees what the dashboard's badges show. A read state that cannot be read is said, not counted from zero, which would call every room unread.
+The same surface's `list_channels` counts each room's unread room posts (a reply is read in its thread, so does not count there), and marks the seat's muted rooms and a do-not-disturb its person is in. A read state that cannot be read is said, not counted from zero, which would call every room unread.
 ## What a reader keeps
 
 A person keeps a few marks of their own in chat, stored with their read state: in
@@ -206,11 +206,12 @@ refused, so a person's whole read state stays within 144 KiB.
 From those marks and the conversation, each reader has views of their own, each
 over the rooms they may read only:
 
-- **Activity**: the moments they were named (or the whole of a room they are in
-  was), replies in threads they follow, and reactions to their messages, newest
-  first. A mention or reply is unread above their places for it, the measure the
-  room's badge counts; each row carries the position that marks it read. A
-  reaction is never unread.
+- **Activity**: the moments somebody named them (or the whole of a room they are
+  in), replies in threads they follow, and reactions to their messages, newest
+  first. A reply naming them is listed once, as the mention. A mention or reply is
+  unread above their places for it, in a room they have not muted: exactly what
+  [waits on them](#what-waits-on-a-reader); each row carries the position that
+  marks it read, its thread's place for a reply. A reaction is never unread.
 - **Threads**: threads they follow, newest reply first, each with its root and
   newest replies.
 - **Saved** and **Sent**: what they saved, and what they said in every room they
@@ -224,6 +225,26 @@ over the rooms they may read only:
   ([what that discloses](../integrations/github.md#pull-request-previews-in-chat)).
 - **One message in place**: a message by id, with its thread's root and the
   replies just before it; how Activity and Saved open one where it was said.
+
+## What waits on a reader
+
+One count answers every badge a person sees: the sidebar's Chatlet row, each
+room's and thread's, and Activity's unread rows. A message waits on them when it
+is unread (above both its room's place and, in a thread, the thread's), not
+theirs, not taken back, in a room they have not muted, and addressed to them:
+
+- any post in a direct conversation;
+- a message naming them or the whole room, a post or a reply;
+- a reply in a thread they follow: one they started, replied in or were named in,
+  or followed by hand, and not one they unfollowed.
+
+Each message counts once, wherever it qualifies twice. The engine counts it room
+by room, in every room they are in and every room they may read where they were
+named or follow a thread, each over its newest 100 messages: what is above their
+place in a room is that room's newest, so the count is exact unless all 100 are,
+and then it is a floor ("100+"). The rail (`chat_channels`) carries it room by
+room and thread by thread, so the badges cannot disagree. Reading a thread, in
+any tab, moves its place and takes its replies out of every count.
 
 ## Search
 

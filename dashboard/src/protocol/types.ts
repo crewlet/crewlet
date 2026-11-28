@@ -4652,13 +4652,6 @@ export interface ChatChannelSummary {
   /** The count stopped at the limit — the "99+" case, stated rather than
    *  inferred from the number. */
   unread_capped?: boolean;
-  /** Of `unread`, the room posts that name this viewer or the whole room
-   *  (`@channel`): the accent badge. Counted over the same messages, so it is
-   *  never more than `unread` and it stopped where `unread_capped` says that
-   *  did. A direct conversation is counted the same way; a screen that treats
-   *  every unread message there as addressed to the reader reads `unread`. A
-   *  muted room is counted too: the mute is the screen's to apply. */
-  mentions: number;
   last?: ChatMessagePreview;
   /** Who is in a direct conversation, which is how one is titled. */
   participants?: string[];
@@ -4666,9 +4659,31 @@ export interface ChatChannelSummary {
   muted?: boolean;
 }
 
+/**
+ * What waits on the reader in one place: a room's own posts (`root_id` empty)
+ * or one thread's replies — `chatlet.Waiting`.
+ */
+export interface ChatWaitingPlace {
+  channel_id: string;
+  root_id: string;
+  count: number;
+  /** The room's count stopped at its window of its newest 100 messages: a floor. */
+  capped: boolean;
+}
+
 /** The viewer's own rooms, newest activity first — `chat_channels`. */
 export interface ChatChannelsAnswer extends ChatServed {
   channels: ChatChannelSummary[];
+  /**
+   * What waits on the reader, place by place, over every room they may read:
+   * a direct conversation's unread posts, a message naming them or the room,
+   * and a reply in a thread they follow, each once, none in a muted room. The
+   * rows Activity marks unread, so every badge is this one count. Each room is
+   * counted over its newest 100 messages. Empty when `read_state` is false.
+   */
+  waiting: ChatWaitingPlace[];
+  /** A count in `waiting` stopped at its window, or rooms were left out: a floor. */
+  waiting_capped: boolean;
   /**
    * Rooms were left out: this person is in more rooms than
    * `chatlet.MaxRailChannels` (256), or more matched than the `limit` the
@@ -5163,14 +5178,16 @@ export interface ChatActivityItem {
   emoji?: string;
   /** When the reader was named, the reply was said, or the reaction made. */
   at: string;
-  /** A mention or a reply above the reader's cursor for the room (which
-   *  counts thread replies, as the rail does). ABSENT on a reaction, which
-   *  asks nothing of anybody, and on every row when `read_state` is false. */
+  /** A mention or a reply above the reader's places for it (the room's and,
+   *  in a thread, the thread's), in a room they have not muted: what waits on
+   *  them, as `chat_channels`' `waiting` counts it. ABSENT on a reaction,
+   *  which asks nothing of anybody, and on every row when `read_state` is
+   *  false. */
   unread?: boolean;
-  /** The PACKED log position that, sent as the room's cursor through
-   *  `mark_chat_read`, marks this row read. A cursor only moves forward, so
-   *  it also marks what was said before it in that room read, which is what
-   *  the room's own badge means. Absent on a reaction. */
+  /** The PACKED log position that, sent through `mark_chat_read` as the
+   *  thread's place (`thread_cursors`) for a row in a thread and the room's
+   *  otherwise, marks this row read. A place only moves forward, so it also
+   *  marks what was said before it there read. Absent on a reaction. */
   read_through?: number;
 }
 

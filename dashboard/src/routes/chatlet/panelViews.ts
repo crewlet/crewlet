@@ -42,7 +42,7 @@ export const PANEL_VIEWS: readonly PanelView[] = (CHATLET?.sections ?? []).flatM
 export interface ReaderCounts {
   /** Activity items the reader has not seen: mentions, replies, reactions. */
   activity: number;
-  /** New replies in the threads the reader follows. */
+  /** Unread replies in the threads the reader follows. */
   threads: number;
   /** Messages the reader saved for later. */
   saved: number;
@@ -91,8 +91,9 @@ export function viewCount(
     // so the page's row adds no second figure for the same messages.
     case "dms":
       return null;
+    // A REPLY IN A THREAD THEY FOLLOW WAITS ON THEM, as the sidebar counts it.
     case "threads":
-      return held.counts && figure(held.counts.threads, "new replies", "quiet");
+      return held.counts && figure(held.counts.threads, "unread replies", "attention");
     case "drafts":
       return figure(unsentCount(held.drafts, held.outbox), "unsent", "quiet");
     case "saved":
