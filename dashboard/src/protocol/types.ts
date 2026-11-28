@@ -5165,10 +5165,10 @@ export interface ChatActivityItem {
    *  which asks nothing of anybody, and on every row when `read_state` is
    *  false. */
   unread?: boolean;
-  /** The PACKED log position that, sent as the room's cursor through
-   *  `mark_chat_read`, marks this row read. A cursor only moves forward, so
-   *  it also marks what was said before it in that room read, which is what
-   *  the room's own badge means. Absent on a reaction. */
+  /** The PACKED log position that, sent through `mark_chat_read` as the
+   *  thread's place (`thread_cursors`) for a row in a thread and the room's
+   *  otherwise, marks this row read. A place only moves forward, so it also
+   *  marks what was said before it there read. Absent on a reaction. */
   read_through?: number;
 }
 

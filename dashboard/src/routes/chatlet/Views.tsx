@@ -344,13 +344,17 @@ export function ActivityView() {
     : null;
 
   const markItem = (item: ChatActivityItem) => {
-    // MARKED READ WHERE IT IS READ: the row's own position, sent as its
-    // room's cursor, which only moves forward.
+    // MARKED READ WHERE IT IS READ: the row's own position, as its thread's
+    // place for a reply (the room's would read every other thread too) and
+    // its room's otherwise. A place only moves forward.
     if (!item.unread || item.read_through === undefined) return;
+    const through = item.read_through;
     void markRead(
       mark,
       store,
-      { cursors: { [item.channel_id]: item.read_through } },
+      item.thread_root
+        ? { thread_cursors: { [item.thread_root]: through } }
+        : { cursors: { [item.channel_id]: through } },
       { done: "Marked as read", quiet: true },
     );
   };

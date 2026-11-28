@@ -139,6 +139,31 @@ describe("Activity", () => {
     expect(presses[0]).toMatchObject({ tool: "mark_chat_read", args: { cursors: { [ROOM]: 41 } } });
   });
 
+  // A REPLY IS READ IN ITS THREAD: its own place moves, never the room's, which
+  // would read every other thread's replies below it too. Mutation: send the
+  // room's cursor for every row and the press names the room.
+  test("opening an unread reply marks it read through its thread's place alone", async () => {
+    const reply = {
+      ...item,
+      key: "reply:r-2",
+      kind: "reply",
+      message_id: "r-2",
+      thread_root: "m-1",
+      excerpt: "merged",
+    };
+    mount(<ActivityView />, "#/chatlet/activity", {
+      chat_activity: { ...FEED, items: [reply], unread: { mention: 0, reply: 1 } },
+      chat_message: { ...MESSAGE, view: view("r-2", "bo", { thread_root: "m-1" }) },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Reply in #launch/ }));
+    await waitFor(() => expect(presses).toHaveLength(1));
+    expect(presses[0]).toMatchObject({
+      tool: "mark_chat_read",
+      args: { thread_cursors: { "m-1": 41 } },
+    });
+    expect(presses[0]!.args).not.toHaveProperty("cursors");
+  });
+
   test("an address with an item opens it, as a reload does", async () => {
     mount(<ActivityView />, "#/chatlet/activity?item=mention%3Am-2", {
       chat_activity: FEED,
