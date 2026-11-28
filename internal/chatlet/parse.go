@@ -187,7 +187,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		// record: the seats still read the message in the room.
 		log.InfoContext(ctx, "chat_wakes_held", "message", n.MessageID,
 			"channel", n.ChannelID, "author", n.Author,
-			"author_kind", string(n.AuthorKind), "asks", n.Asks,
+			"author_kind", string(n.AuthorKind), "asks", n.Asking(),
 			"held", len(n.Held), "woken", len(routed))
 	}
 	held := heldSeats(n, rosterOf(reg))

@@ -467,6 +467,11 @@ type Notify struct {
 // would turn every long message into a refused write rather than a marked one.
 func Excerpt(body string) string { return textcut.Within(body, MaxExcerpt) }
 
+// Asking reports whether the message asks something of the seats it reaches,
+// as the quiet rule reads it ([Routing.silent]): a person's always does, an
+// agent's only where it said so ([Notify.Asks]).
+func (n *Notify) Asking() bool { return n.AuthorKind != AuthorAgent || n.Asks }
+
 // Validate refuses a notification that would render wrong or cost the fleet
 // more than it was meant to.
 //
