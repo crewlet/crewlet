@@ -215,7 +215,13 @@ test.each(SEATED)("a thread's reply is drawn for $who, held with why", async (re
     hash: `#/chatlet/${ROOM}?pane=thread:${ROOM}:m-1`,
     viewer: reader.viewer,
     answers: {
-      chat_channels: { ...served, read_state: true, channels: [] },
+      chat_channels: {
+        ...served,
+        read_state: true,
+        waiting: [],
+        waiting_capped: false,
+        channels: [],
+      },
       chat_channel: detail,
       chat_thread: { ...served, channel_id: ROOM, root: said, replies: [] },
     } as never,

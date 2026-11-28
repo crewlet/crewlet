@@ -44,7 +44,7 @@ const view = (id: string, author: string, extra: Record<string, unknown> = {}) =
   position: SERVED.position,
 });
 
-const RAIL = { ...SERVED, read_state: true, channels: [] };
+const RAIL = { ...SERVED, read_state: true, waiting: [], waiting_capped: false, channels: [] };
 
 let presses: Pressed[];
 
@@ -196,7 +196,6 @@ describe("Activity", () => {
       channel: { v: 1, id, kind, created_at: "2026-10-01T00:00:00Z" },
       participants,
       unread: 0,
-      mentions: 0,
     });
     const row = (key: string, kind: string, channel: string, channelKind: string) => ({
       ...item,
@@ -284,6 +283,25 @@ describe("Threads", () => {
       },
     ],
   };
+
+  // THE SIDEBAR'S COUNT FOR EACH THREAD, off the frame's one reading: a thread
+  // with replies waiting says how many, one with none says nothing.
+  test("each thread says how many of its replies wait on the reader", async () => {
+    mount(<ThreadsView />, "#/chatlet/threads", {
+      chat_threads: THREADS,
+      chat_channels: {
+        ...RAIL,
+        waiting: [{ channel_id: ROOM, root_id: "m-1", count: 2, capped: false }],
+      },
+    });
+    expect(await screen.findByText("2 waiting on you")).toBeTruthy();
+  });
+
+  test("a thread with nothing waiting carries no count", async () => {
+    mount(<ThreadsView />, "#/chatlet/threads", { chat_threads: THREADS });
+    await screen.findByRole("button", { name: /^unfollow$/i });
+    expect(screen.queryByText(/waiting on you/)).toBeNull();
+  });
 
   test("Unfollow writes the reader's own mark", async () => {
     mount(<ThreadsView />, "#/chatlet/threads", { chat_threads: THREADS });
@@ -417,7 +435,6 @@ describe("Drafts and sent", () => {
             channel: { v: 1, id: "dm-1", kind: "dm", created_at: "2026-10-01T00:00:00Z" },
             participants: ["ada", "bo"],
             unread: 0,
-            mentions: 0,
           },
         ],
       },

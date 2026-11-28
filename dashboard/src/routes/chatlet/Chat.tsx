@@ -80,7 +80,7 @@ import {
 } from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
-import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
+import { badgesAreMeasured, useChatRooms, useChatWaiting } from "~/lib/chatRooms.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -343,6 +343,7 @@ export function ChatFrameRoot({
 
   const channels = useMemo(() => rail.data?.channels ?? [], [rail.data]);
   const measured = badgesAreMeasured(rail.data);
+  const waiting = useChatWaiting();
 
   // THE OPEN ROOM'S OWN DETAIL, read ONCE for the top bar, the room and every
   // pane about it, and asked again on every live frame in the room. An answer
@@ -420,6 +421,7 @@ export function ChatFrameRoot({
       rail,
       channels,
       measured,
+      waiting,
       outbox,
       cursors,
       markRead: markReadThrough,
@@ -435,6 +437,7 @@ export function ChatFrameRoot({
       rail,
       channels,
       measured,
+      waiting,
       outbox,
       cursors,
       markReadThrough,

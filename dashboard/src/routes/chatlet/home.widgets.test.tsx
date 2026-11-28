@@ -65,6 +65,8 @@ const room = (id: string, name: string, unread: number, extra: Record<string, un
 
 const RAIL = {
   read_state: true,
+  waiting: [],
+  waiting_capped: false,
   read: { handle: "ada", revision: 3, cursors: {} },
   channels: [
     room("c-general", "general", 2),

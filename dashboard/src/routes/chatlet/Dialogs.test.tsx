@@ -49,12 +49,13 @@ const detail = (extra: Record<string, unknown> = {}) => ({
 const rail = (fresh = false, extra: Record<string, unknown> = {}) => ({
   ...SERVED,
   read_state: true,
+  waiting: [],
+  waiting_capped: false,
   channels: [
     {
       channel: channel(extra),
       revision: 1,
       unread: 0,
-      mentions: 0,
       ...(fresh
         ? {}
         : {

@@ -45,7 +45,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 
 import { useOwnStar } from "~/app/Shell.tsx";
-import { attentionFigure, isDirect, useChatAttention } from "~/lib/chatRooms.ts";
+import { attentionFigure, isDirect, useChatAttention, type ChatWaiting } from "~/lib/chatRooms.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import { ChatFace } from "./Face.tsx";
@@ -53,7 +53,7 @@ import { useChatFrame, useChatNav, useOpenRoom, type ChatPlace, type OpenRoom } 
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { RoomActions } from "./RoomActions.tsx";
 import { RoomMark } from "./RoomsPanel.tsx";
-import { roomTitle, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
+import { roomTitle, unreadIn, unreadLabel, waitingIn, waitingLabel } from "./rooms.ts";
 import { useViewBarSlot } from "./ViewHead.tsx";
 
 /** Under this width of the bar, Menu drops its word. */
@@ -122,11 +122,11 @@ function waitingElsewhere(count: number, where: keyof typeof ELSEWHERE): string 
 /** What waits on the reader across these rooms, the open one excepted. */
 function waitingAcross(
   rooms: readonly ChatChannelSummary[],
-  measured: boolean,
+  waiting: ChatWaiting | null,
   except = "",
 ): number {
   return rooms.reduce(
-    (sum, room) => sum + (room.channel.id === except ? 0 : waitingIn(room, measured)),
+    (sum, room) => sum + (room.channel.id === except ? 0 : waitingIn(room, waiting)),
     0,
   );
 }
@@ -134,18 +134,18 @@ function waitingAcross(
 /** A room's row in a switcher: its mark, its name, and what waits in it. */
 function useRoomOption() {
   const nav = useChatNav();
-  const { viewer, nameOf, measured } = useChatFrame();
+  const { viewer, nameOf, waiting: counts } = useChatFrame();
   return (room: ChatChannelSummary, current: string): SwitcherOption => {
     const name = roomTitle(room.channel, { participants: room.participants, viewer, nameOf });
-    const waiting = waitingIn(room, measured);
-    const unread = unreadIn(room, measured) ? unreadLabel(room.unread, room.unread_capped) : "";
+    const waiting = waitingIn(room, counts);
+    const unread = unreadIn(room, counts) ? unreadLabel(room.unread, room.unread_capped) : "";
     const place: ChatPlace = { kind: "room", id: room.channel.id };
     return {
       id: room.channel.id,
       label: name,
       icon: <RoomMark room={room} />,
       meta: waiting ? (
-        <Count tone="attention" value={unreadLabel(waiting, room.unread_capped)} />
+        <Count tone="attention" value={waitingLabel(room, waiting, counts)} />
       ) : unread ? (
         <span className="chat-switch-figure">{unread} new</span>
       ) : undefined,
@@ -185,7 +185,7 @@ function useOpenOfKind(direct: boolean): OpenRoom | null {
 /** Rooms: the open room's name, and every room the reader is in under it. */
 function RoomSwitcher({ tight }: { tight: boolean }) {
   const nav = useChatNav();
-  const { measured, starred } = useChatFrame();
+  const { starred, waiting: counts } = useChatFrame();
   const sw = useSwitcher();
   const option = useRoomOption();
   const all = useListedRooms().filter((room) => !isDirect(room.channel.kind));
@@ -193,7 +193,7 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
   const current = here?.id ?? "";
   const rooms = all.filter((room) => matches(sw.query, room.channel.name, room.channel.topic));
   const isStarred = (room: ChatChannelSummary) => starred.has(room.channel.id);
-  const elsewhere = waitingAcross(all, measured, current);
+  const elsewhere = waitingAcross(all, counts, current);
   const browse: SwitcherOption = {
     id: "browse",
     label: "Browse rooms",
@@ -264,7 +264,7 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
 /** Messages: the open conversation's name, conversations, then whom to start one with. */
 function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean }) {
   const nav = useChatNav();
-  const { viewer, nameOf, measured } = useChatFrame();
+  const { viewer, nameOf, waiting: counts } = useChatFrame();
   const people = useChatPeople();
   const sw = useSwitcher();
   const option = useRoomOption();
@@ -284,7 +284,7 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
     (person) =>
       person.handle !== viewer && !talking.has(person.handle) && matchesPerson(person, sw.query),
   );
-  const elsewhere = waitingAcross(all, measured, current);
+  const elsewhere = waitingAcross(all, counts, current);
   return (
     <span className="chat-switch">
       <Switcher

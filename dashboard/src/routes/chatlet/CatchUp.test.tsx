@@ -37,8 +37,10 @@ const answers = {
   chat_channels: {
     ...SERVED,
     read_state: true,
+    waiting: [],
+    waiting_capped: false,
     read: { handle: "ada", revision: 1, cursors: {} },
-    channels: [{ channel, revision: 1, unread: 3, mentions: 0 }],
+    channels: [{ channel, revision: 1, unread: 3 }],
   },
   chat_channel: {
     ...SERVED,

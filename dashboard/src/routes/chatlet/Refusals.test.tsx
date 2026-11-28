@@ -105,7 +105,8 @@ const answering =
     if (what === refused) refusal();
     if (what === "chat_channel") return room;
     if (what === "chat_messages") return { ...served, channel_id: "room-1", messages: [] };
-    if (what === "chat_channels") return { ...served, read_state: true, channels: [] };
+    if (what === "chat_channels")
+      return { ...served, read_state: true, waiting: [], waiting_capped: false, channels: [] };
     throw new QueryError("unknown_query");
   };
 

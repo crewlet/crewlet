@@ -47,6 +47,8 @@ async function answer(what: string) {
       return {
         ...served,
         read_state: true,
+        waiting: [],
+        waiting_capped: false,
         read: { handle: "ada", revision: 1, cursors: {} },
         channels: [],
       };

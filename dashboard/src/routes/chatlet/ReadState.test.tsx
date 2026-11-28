@@ -115,7 +115,8 @@ function answering(c: (typeof CASES)[number], fails: number) {
     }
     if (what === "chat_channel") return room;
     if (what === "chat_messages") return { ...served, channel_id: "room-1", messages: [] };
-    if (what === "chat_channels") return { ...served, read_state: true, channels: [] };
+    if (what === "chat_channels")
+      return { ...served, read_state: true, waiting: [], waiting_capped: false, channels: [] };
     throw new QueryError("unknown_query");
   };
   return { asked, answer };
@@ -153,7 +154,13 @@ test("a room whose standing is not read yet draws no empty join bar", async () =
     if (what === "chat_channel") return new Promise(() => undefined);
     if (what === "chat_messages") return { ...served, channel_id: "room-1", messages: [said] };
     if (what === "chat_channels")
-      return { ...served, read_state: true, channels: [{ channel, revision: 1, unread: 0 }] };
+      return {
+        ...served,
+        read_state: true,
+        waiting: [],
+        waiting_capped: false,
+        channels: [{ channel, revision: 1, unread: 0 }],
+      };
     throw new QueryError("unknown_query");
   });
   await screen.findByText("the date moved to Thursday");
@@ -166,7 +173,8 @@ test("a search still out claims no count of messages", async () => {
     hash: "#/chatlet/search?q=thursday",
     answer: async (what) => {
       if (what === "chat_search") return new Promise(() => undefined);
-      if (what === "chat_channels") return { ...served, read_state: true, channels: [] };
+      if (what === "chat_channels")
+        return { ...served, read_state: true, waiting: [], waiting_capped: false, channels: [] };
       throw new QueryError("unknown_query");
     },
   });
