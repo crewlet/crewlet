@@ -12,7 +12,7 @@
 
 import type { DeliveryReceiptRecipient } from "@crewlethq/ui";
 
-import type { ChatAnswer, ChatMessage, ChatQuiet, ChatReach } from "~/protocol/index.ts";
+import type { ChatAnswer, ChatMessage, ChatQuiet, ChatReach, ChatTake } from "~/protocol/index.ts";
 
 /**
  * The note drawn after the seats a reason reached, for the reasons a person
@@ -27,20 +27,41 @@ const REASON_NOTES: Record<string, string> = {
   follow: "following the thread",
 };
 
-/** The seats a reach names, as the receipt draws them, answered or not, and when. */
+/** The note beside a seat whose running turn took the message into its work. */
+const JOINED_NOTE = "taken into its running work";
+
+/** What stands for an answer from a seat whose running turn read the message
+ *  there and found it asks nothing: no reply, and none owed. */
+const ABSORBED_NOTE = "nothing to answer, read in its running work";
+
+/**
+ * The seats a reach names, as the receipt draws them, answered or not, and
+ * when. A seat whose running turn took the message instead of a turn of its own
+ * says so: joined, it is still waited on, noted as taken into its work;
+ * absorbed, it owes nothing, and stands with those that answered as having
+ * read it there.
+ */
 export function reachRecipients(
   reach: ChatReach | undefined,
   answered: readonly ChatAnswer[] | undefined,
   nameOf: (handle: string) => string,
   timeOf?: (at: string) => string,
+  taken?: readonly ChatTake[],
 ): DeliveryReceiptRecipient[] {
   const done = new Map((answered ?? []).map((a) => [a.handle, a.at]));
+  const took = new Map((taken ?? []).map((t) => [t.handle, t]));
   return (reach?.recipients ?? []).map((r) => {
+    const base = { id: r.handle, name: nameOf(r.handle) };
     const at = done.get(r.handle);
+    const take = at === undefined ? took.get(r.handle) : undefined;
+    if (take?.as === "absorbed") {
+      const when = timeOf ? `${ABSORBED_NOTE} at ${timeOf(take.at)}` : ABSORBED_NOTE;
+      return { ...base, reason: REASON_NOTES[r.reason], answered: true, answeredAt: when };
+    }
+    const note = REASON_NOTES[r.reason];
     return {
-      id: r.handle,
-      name: nameOf(r.handle),
-      reason: REASON_NOTES[r.reason],
+      ...base,
+      reason: take?.as === "joined" ? (note ? `${note}, ${JOINED_NOTE}` : JOINED_NOTE) : note,
       answered: at !== undefined,
       ...(at !== undefined && timeOf ? { answeredAt: timeOf(at) } : {}),
     };
@@ -66,6 +87,7 @@ export function showsReceipt(
   message: ChatMessage,
   isAgent: (handle: string) => boolean,
   answered?: readonly ChatAnswer[],
+  taken?: readonly ChatTake[],
 ): boolean {
   const reach = message.reach;
   if (!reach || message.event || message.deleted_at || message.author_kind !== "human") {
@@ -73,7 +95,11 @@ export function showsReceipt(
   }
   const recipients = reach.recipients ?? [];
   if (recipients.length > 0) {
-    return (answered ?? []).length > 0 || recipients.some((r) => r.reason !== "follow_all");
+    return (
+      (answered ?? []).length > 0 ||
+      (taken ?? []).length > 0 ||
+      recipients.some((r) => r.reason !== "follow_all")
+    );
   }
   return (message.mentions ?? []).some(isAgent);
 }

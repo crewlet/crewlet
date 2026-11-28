@@ -500,6 +500,23 @@ var opChatReact = define("chat.react", opOnceWrite, chatDomain, false,
 	}).repeatableWhen(func(a chatReactArgs) bool { return chatKeyed(a.Actor) }).
 	refusedBeforeAsking(func(a chatReactArgs) error { return chatActorWrites(a.Actor) })
 
+type chatTakeArgs struct {
+	Actor     chatlet.Actor
+	ChannelID string
+	MessageID string
+	Handle    string
+	As        chatlet.Taken
+}
+
+var opChatTake = define("chat.take_receipt", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatTakeArgs) (chatlet.Written, error) {
+		if b.ChatWriter == nil {
+			return chatlet.Written{}, errNoHalf
+		}
+		return b.ChatWriter.TakeReceipt(ctx, a.Actor, a.ChannelID, a.MessageID, a.Handle, a.As)
+	}).repeatableWhen(func(a chatTakeArgs) bool { return chatKeyed(a.Actor) }).
+	refusedBeforeAsking(func(a chatTakeArgs) error { return chatActorWrites(a.Actor) })
+
 // ---- the admin's chat writes --------------------------------------------- //
 
 type chatSetRetentionArgs struct {

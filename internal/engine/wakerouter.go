@@ -131,6 +131,9 @@ type wakeOrigin struct {
 	workingFor       *types.WorkingFor
 	conversation     string
 	item             *types.WorkItem
+	// room is the chat room it was written in, as its conversation's
+	// identity begins ([roomOf]), "" for a wake that is no chat message.
+	room string
 }
 
 // originOf is ev's [wakeOrigin] as seat handle's turn would read it.
@@ -145,7 +148,19 @@ func (e *Engine) originOf(handle string, ev *events.Event) wakeOrigin {
 		workingFor:   workingForIn(evs),
 		conversation: notify.ConversationIdentityOf(ev),
 		item:         item,
+		room:         roomOf(ev),
 	}
+}
+
+// roomOf is the chat room ev was written in, namespaced by its transport as
+// every conversation identity in it is ([notify.Namespaced]): a direct
+// conversation's whole identity, a thread's prefix. "" for no chat message.
+func roomOf(ev *events.Event) string {
+	n, ok := events.DataAs[*types.ExternalNotification](ev)
+	if !ok || n == nil {
+		return ""
+	}
+	return notify.Namespaced(n.Metadata[notify.TransportField], n.Metadata[notify.ChannelField])
 }
 
 // routeOf is whether wake ev, from o, joins run, and by which rule, else why it
@@ -232,11 +247,16 @@ func (e *Engine) wakeFor(handle string, ev *events.Event, o wakeOrigin) (steer.W
 	if reply := ReplyFor([]*events.Event{ev}); reply.Awaited() {
 		owes = reply.String()
 	}
+	message := ""
+	if r, ok := receiptOf(ev); ok {
+		message = r.String()
+	}
 	return steer.Wake{
 		ID: ev.ID.String(), Triggers: []string{ev.ID.String()}, Keys: deliveryKeys(ev),
 		By: by, ByKind: kind, WorkingFor: notify.WorkingForKey(o.workingFor),
 		Conversation: o.conversation, Partition: notify.KeyOfAll([]*events.Event{ev}), Label: *label,
 		OwesAnswer: obliges(ev), At: ev.Timestamp, Owes: owes, Seen: notify.TriggerOf(ev), Text: ask.Text(),
+		Message: message,
 	}, true
 }
 
@@ -259,6 +279,9 @@ type seatRouters struct {
 	last    map[string]<-chan struct{}
 	routes  map[string]*seatRoute
 	stopped bool
+	// marks is the receipts being written off a read's path ([Engine.tookOver]),
+	// waited out as the routers stop.
+	marks sync.WaitGroup
 }
 
 // seatRoute is what a seat's router and its screen of a flowing inbox
@@ -368,6 +391,7 @@ func (e *Engine) stopRouters() {
 	for _, end := range ends {
 		<-end
 	}
+	routers.marks.Wait()
 }
 
 // routerStreamBudget bounds a router's withdrawal of its nudges' subscriptions,

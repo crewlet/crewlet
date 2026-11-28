@@ -176,8 +176,8 @@ describe("what a frame reaches", () => {
     }
   });
 
-  test("an edit, a delete or a reaction changes the one message it names", () => {
-    for (const op of ["edit", "delete", "react"]) {
+  test("an edit, a delete, a reaction or a take changes the one message it names", () => {
+    for (const op of ["edit", "delete", "react", "take"]) {
       expect(reachOf(change(op, { message_id: "m-1" }))).toBe("message");
     }
   });

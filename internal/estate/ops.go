@@ -336,6 +336,10 @@ type ChatWriter interface {
 		emoji string) (chatlet.Written, error)
 	Unreact(ctx context.Context, actor chatlet.Actor, channelID, messageID,
 		emoji string) (chatlet.Written, error)
+	// TakeReceipt is the engine's record on a seat's receipt for a message
+	// that its running turn took it ([chatlet.Store.TakeReceipt]).
+	TakeReceipt(ctx context.Context, actor chatlet.Actor, channelID, messageID, handle string,
+		as chatlet.Taken) (chatlet.Written, error)
 
 	// The admin's writes, which no seat is handed; the erase and the prune
 	// take the operation id the caller derived, as a purge does.

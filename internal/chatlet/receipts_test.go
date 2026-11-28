@@ -272,3 +272,69 @@ func sameReach(a, b *chatlet.Reach) bool {
 	}
 	return a.Truncated == b.Truncated && slices.Equal(a.Recipients, b.Recipients)
 }
+
+// A RECEIPT SAYS A SEAT'S RUNNING TURN TOOK ITS MESSAGE, AND AN ANSWER STILL
+// LANDS OVER IT. The engine's take of a person's message ([chatlet.OpTake]) is
+// on the receipt its sender reads: one absorbed (read in the running turn,
+// asking nothing) counts as settled, one joined still waits for its answer,
+// which then reads in Answered alone. The first take stands, a take of a seat
+// the message keeps no receipt for is refused, and only the engine records one.
+//
+// Mutation: drop applyTake's update, read takes nowhere beside the page, or
+// count a joined take as settled, and this goes red.
+func TestAReceiptSaysARunningTurnTookItsMessage(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane").withRank("cto", "dev"))
+	room := r.room(person("jane"), "engineering", "dev", "cto").Channel.ID
+	asked, err := r.store.Post(t.Context(), keyed(person("jane"), requested("k-ask")), room,
+		chatlet.NewMessage{Body: "@dev @cto thanks, and where are we on the release?",
+			Mentions: []string{"dev", "cto"}})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	r.drain()
+	engine := chatlet.Actor{Handle: "sessions", Kind: chatlet.AuthorSystem, TurnID: "turn-1"}
+	take := func(handle string, as chatlet.Taken) {
+		t.Helper()
+		if _, err := r.store.TakeReceipt(t.Context(), engine, room, asked.Message.ID, handle, as); err != nil {
+			t.Fatalf("take %s's receipt as %s: %v", handle, as, err)
+		}
+		r.drain()
+	}
+	take("cto", chatlet.TakenAbsorbed)
+	view := readOne(t, r, room, asked.Message.ID)
+	if view.Delivery != chatlet.DeliveryPartlyAnswered || len(view.Taken) != 1 ||
+		view.Taken[0].Handle != "cto" || view.Taken[0].As != chatlet.TakenAbsorbed {
+		t.Fatalf("after cto's running turn absorbed it the message reads %q taken %+v, want partly "+
+			"answered with cto's take", view.Delivery, view.Taken)
+	}
+	take("dev", chatlet.TakenJoined)
+	take("dev", chatlet.TakenAbsorbed)
+	if _, err := r.store.TakeReceipt(t.Context(), engine, room, asked.Message.ID, "ghost",
+		chatlet.TakenJoined); !errors.Is(err, chatlet.ErrNotFound) {
+		t.Errorf("a take of a seat the message keeps no receipt for answered %v, want not found: "+
+			"nothing on the message could say it", err)
+	}
+	view = readOne(t, r, room, asked.Message.ID)
+	if view.Delivery != chatlet.DeliveryPartlyAnswered || len(view.Taken) != 2 ||
+		view.Taken[1].Handle != "dev" || view.Taken[1].As != chatlet.TakenJoined {
+		t.Fatalf("after dev's running turn joined it the message reads %q taken %+v, want dev joined "+
+			"and still owed its answer", view.Delivery, view.Taken)
+	}
+	reply, err := r.store.Reply(t.Context(), keyed(seat("dev", "run-2"), requested("k-reply")),
+		room, asked.Message.ID, chatlet.NewMessage{Body: "on track for Friday"})
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	r.drain()
+	view = readOne(t, r, room, asked.Message.ID)
+	if view.Delivery != chatlet.DeliveryAnswered || len(view.Answered) != 1 ||
+		view.Answered[0].MessageID != reply.Message.ID || len(view.Taken) != 1 || view.Taken[0].Handle != "cto" {
+		t.Fatalf("after dev answered the message reads %q answered %+v taken %+v, want answered with "+
+			"dev's reply and cto's take alone", view.Delivery, view.Answered, view.Taken)
+	}
+	if _, err := r.store.TakeReceipt(t.Context(), seat("dev", "run-3"), room, asked.Message.ID, "dev",
+		chatlet.TakenJoined); !errors.Is(err, chatlet.ErrForbidden) {
+		t.Errorf("a seat recorded a take of its own receipt (%v), want it refused: the take is the engine's", err)
+	}
+}

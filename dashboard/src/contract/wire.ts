@@ -40,6 +40,7 @@ export type PushKind =
   | "chat_edited"
   | "chat_deleted"
   | "chat_reacted"
+  | "chat_taken"
   | "chat_room_changed"
   | "chat_membership_changed"
   | "chat_cursor_moved"

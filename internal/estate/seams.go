@@ -1033,6 +1033,17 @@ func (c Chat) Unreact(ctx context.Context, actor chatlet.Actor, channelID, messa
 	return out, err
 }
 
+// TakeReceipt records on handle's receipt for a message that its running turn
+// took it, as the engine ([chatlet.Store.TakeReceipt]).
+func (c Chat) TakeReceipt(ctx context.Context, actor chatlet.Actor, channelID, messageID, handle string,
+	as chatlet.Taken) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatTake, nil, chatTakeArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Handle: handle, As: as,
+	})
+	c.settled(out)
+	return out, err
+}
+
 // SetRetention states how long a room keeps what is said in it: days, or nil
 // for the company's default.
 func (c Chat) SetRetention(ctx context.Context, actor chatlet.Actor, channelID string,

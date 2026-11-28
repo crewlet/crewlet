@@ -175,7 +175,7 @@ export function mergeOlder(tail: Tail, page: ChatMessagesAnswer): Tail {
  *     at the end of its room or its thread, and a room's own records — its
  *     creation, its settings, its members — change no message at all.
  *   - `message`: it changed the one message it names — an edit, a delete, a
- *     reaction.
+ *     reaction, a running turn's take on its receipt.
  *   - `room`: it may have changed any of them. An erase or a prune names no
  *     message, and an op this build does not know is one whose reach it
  *     cannot say, so it is read as the widest.
@@ -192,6 +192,7 @@ export function reachOf(frame: ChatChange): Reach {
     case "edit":
     case "delete":
     case "react":
+    case "take":
       return frame.message_id ? "message" : "room";
     default:
       return "room";

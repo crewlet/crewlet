@@ -13,12 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -172,18 +174,26 @@ type routerRig struct {
 	seen           *ledgerstore.SeenThrough
 	job            string
 	subject, group string
-	handed         chan []string
+	handed         chan tookWakes
+	model          *llmtest.Script
 }
 
 func newRouterRig(t *testing.T) *routerRig {
+	t.Helper()
+	return newRouterRigFor(t, "lead", "chat:C1")
+}
+
+// newRouterRigFor is [newRouterRig] whose run requester asked for in
+// conversation.
+func newRouterRigFor(t *testing.T, requester, conversation string) *routerRig {
 	t.Helper()
 	ctx := t.Context()
 	fleet := coordmem.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	runs, _ := steersOver(t, steerRing, store)
 	ledger := ledgerstore.NewMemoryCompletions()
-	handed := make(chan []string, 8)
-	runs.claimingIn(ledger).telling(func(_ context.Context, _ string, triggers []string) { handed <- triggers })
+	handed := make(chan tookWakes, 8)
+	runs.claimingIn(ledger).telling(func(_ context.Context, _ string, took tookWakes) { handed <- took })
 	q := memory.New()
 	if err := q.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -204,7 +214,7 @@ func newRouterRig(t *testing.T) *routerRig {
 	}
 	opened, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
-		TraceID: "tr-1", CreatedAt: time.Now().UTC(), Requester: "lead", ConversationKey: "chat:C1",
+		TraceID: "tr-1", CreatedAt: time.Now().UTC(), Requester: requester, ConversationKey: conversation,
 		Steer: sandbox.RunSteer{Seat: runs.anchor("run-1", sweAgent, "swe")},
 	}, sandbox.Fence{})
 	if err != nil {
@@ -293,8 +303,9 @@ func TestARequestersFollowUpJoinsTheRunOnceAndItsDeliveryIsSkippedNamingTheTurn(
 	r.runs.confirmed(ctx, mustRow(t, r.store, "run-1"), settled)
 	select {
 	case got := <-r.handed:
-		if !slices.Equal(got, []string{followUp.ID.String()}) {
-			t.Errorf("the queued line handed over is %v, want the follow-up's", got)
+		if len(got.wakes) != 1 || !slices.Equal(got.wakes[0].Triggers, []string{followUp.ID.String()}) ||
+			got.as != chatlet.TakenJoined || got.turn != "run-1" {
+			t.Errorf("the queued line handed over is %+v, want the follow-up's, joined to run-1", got)
 		}
 	case <-ctx.Done():
 		t.Fatal("no queued line was taken down for the claimed wake")
