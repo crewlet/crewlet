@@ -458,10 +458,10 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
 
   // WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED AND WHEN: the kit's mark
   // and tooltip, ending the words' last line as "(edited)" does.
-  const receipt = showsReceipt(message, isAgent, view.answered) ? (
+  const receipt = showsReceipt(message, isAgent, view.answered, view.taken) ? (
     <DeliveryReceipt
       className="chat-receipt"
-      recipients={reachRecipients(message.reach, view.answered, names.nameOf, timeOf)}
+      recipients={reachRecipients(message.reach, view.answered, names.nameOf, timeOf, view.taken)}
       truncated={message.reach?.truncated}
       sentAt={timeOf(message.created_at)}
     />

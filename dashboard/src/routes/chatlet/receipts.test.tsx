@@ -83,6 +83,44 @@ describe("the words", () => {
     expect(got[1]).not.toHaveProperty("answeredAt");
   });
 
+  // A RUNNING TURN'S TAKE IS ON THE RECEIPT. Mutation: drop `taken` from
+  // reachRecipients, or count a joined take as answered, and this goes red.
+  test("say a seat's running turn took the message, joined or absorbed", () => {
+    const got = reachRecipients(
+      {
+        recipients: [
+          { handle: "pm", reason: "reply" },
+          { handle: "qa", reason: "mention" },
+          { handle: "sre", reason: "mention" },
+        ],
+      },
+      [{ handle: "sre", message_id: "m-2", at: "2026-01-01T00:02:00Z" }],
+      (handle) => handle,
+      (at) => at.slice(11, 16),
+      [
+        { handle: "pm", as: "joined", at: "2026-01-01T00:01:00Z" },
+        { handle: "qa", as: "absorbed", at: "2026-01-01T00:01:00Z" },
+        { handle: "sre", as: "joined", at: "2026-01-01T00:01:00Z" },
+      ],
+    );
+    expect(got).toEqual([
+      {
+        id: "pm",
+        name: "pm",
+        reason: "in the thread, taken into its running work",
+        answered: false,
+      },
+      {
+        id: "qa",
+        name: "qa",
+        reason: undefined,
+        answered: true,
+        answeredAt: "nothing to answer, read in its running work at 00:01",
+      },
+      { id: "sre", name: "sre", reason: undefined, answered: true, answeredAt: "00:02" },
+    ]);
+  });
+
   // "REACHED NO AGENT" ONLY WHERE THE WORDS ASKED ONE. Mutation: show it for
   // every empty reach in a named room and a room of people warns under every
   // line.

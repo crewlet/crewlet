@@ -84,6 +84,10 @@ const (
 	// KindChatReacted is one emoji put on or taken off a message.
 	KindChatReacted Kind = "chat_reacted"
 
+	// KindChatTaken is a seat's running turn having taken a message, on the
+	// message's receipt ([chatlet.OpTake]).
+	KindChatTaken Kind = "chat_taken"
+
 	// KindChatRoomChanged is a room's own state moving: created, patched,
 	// its horizon set, erased or pruned.
 	//
@@ -131,7 +135,7 @@ const (
 // and against the route table, where every one is [RouteViewer].
 func ChatPushKinds() []Kind {
 	return []Kind{
-		KindChatPosted, KindChatEdited, KindChatDeleted, KindChatReacted,
+		KindChatPosted, KindChatEdited, KindChatDeleted, KindChatReacted, KindChatTaken,
 		KindChatRoomChanged, KindChatMembershipChanged, KindChatCursorMoved,
 		KindChatPresence,
 	}
@@ -875,6 +879,8 @@ func chatPushKind(op chatlet.OpKind) (Kind, bool) {
 		return KindChatDeleted, true
 	case chatlet.OpReact:
 		return KindChatReacted, true
+	case chatlet.OpTake:
+		return KindChatTaken, true
 	case chatlet.OpCreate, chatlet.OpPatch, chatlet.OpRetention, chatlet.OpErase, chatlet.OpPrune:
 		return KindChatRoomChanged, true
 	case chatlet.OpMembers:

@@ -3502,6 +3502,7 @@ var LiveSocket = class {
 			case "chat_edited":
 			case "chat_deleted":
 			case "chat_reacted":
+			case "chat_taken":
 			case "chat_room_changed":
 			case "chat_membership_changed":
 				this.store.applyChatChange(msg.data);

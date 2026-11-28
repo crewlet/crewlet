@@ -4398,6 +4398,7 @@ export type ChatOp =
   | "edit"
   | "delete"
   | "react"
+  | "take"
   | "erase"
   | "prune"
   | (string & {});
@@ -4547,6 +4548,20 @@ export interface ChatAnswer {
   at: string;
 }
 
+/** What a seat's running turn did with a message it took instead of a turn
+ *  of its own: took it into the work (`joined`), or read it there, finding it
+ *  asks nothing (`absorbed`). OPEN. */
+export type ChatTakenAs = "joined" | "absorbed" | (string & {});
+
+/** A seat's running turn having taken a message it was reached by, while it
+ *  has not answered it. */
+export interface ChatTake {
+  handle: string;
+  as: ChatTakenAs;
+  /** The broker instant of the record that said so. */
+  at: string;
+}
+
 /** Where a person's message stands with the agents it reached. `unknown` is
  *  a message whose reach was never recorded (stored before messages recorded
  *  it), which shows no receipt: it is not `no_agent`. OPEN. */
@@ -4593,8 +4608,12 @@ export interface ChatMessageView {
   /** Which of the agents a person's message reached have answered it, in the
    *  order they answered. */
   answered?: ChatAnswer[];
-  /** Where a person's message stands with them; absent on anything that is
-   *  not a person's message. */
+  /** Which of them took it into a running turn instead of a turn of its own,
+   *  and how, while they have not answered it. */
+  taken?: ChatTake[];
+  /** Where a person's message stands with them (one whose running turn
+   *  absorbed it counts as answered); absent on anything that is not a
+   *  person's message. */
   delivery?: ChatDelivery;
 }
 
