@@ -152,10 +152,11 @@ type runSteers struct {
 	// nil moves none.
 	seen *ledgerstore.SeenThrough
 
-	// handedOver is told, for a seat, the deliveries a step of one of its runs
-	// read as wakes once they are claimed ([Engine.settleWaiting]): a person's
-	// message queued behind the busy seat is queued no longer. Nil tells nobody.
-	handedOver func(ctx context.Context, handle string, triggers []string)
+	// handedOver is told, for a seat, the wakes one of its running turns took
+	// in place of turns of their own ([Engine.tookOver]): a person's message
+	// queued behind the busy seat is queued no longer, and its receipt says
+	// so. Nil tells nobody.
+	handedOver func(ctx context.Context, handle string, took tookWakes)
 
 	// warned is every note whose seal this node has logged it cannot open, so
 	// a view that follows a busy record does not say so on every write.
@@ -275,9 +276,9 @@ func (s *runSteers) seeingThrough(seen *ledgerstore.SeenThrough) *runSteers {
 	return s
 }
 
-// telling has s tell handedOver every delivery a run read as a wake, once
-// claimed ([runSteers.handedOver]).
-func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, triggers []string)) {
+// telling has s tell handedOver every wake a running turn took, once claimed
+// ([runSteers.handedOver]).
+func (s *runSteers) telling(handedOver func(ctx context.Context, handle string, took tookWakes)) {
 	s.handedOver = handedOver
 }
 

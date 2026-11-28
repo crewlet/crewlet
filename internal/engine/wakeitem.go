@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -65,6 +66,7 @@ type wakeSealBody struct {
 	Informs      bool             `json:"informs"`
 	FromRun      string           `json:"from_run"`
 	FromSeat     string           `json:"from_seat"`
+	Message      string           `json:"message"`
 }
 
 // errNoWakeSeal is a wake sealed by run steers built with no wake seal.
@@ -93,7 +95,7 @@ func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.Sealed
 			ByKind: string(w.ByKind), WorkingFor: w.WorkingFor, Conversation: w.Conversation,
 			Partition: w.Partition, Label: w.Label, OwesAnswer: w.OwesAnswer, At: w.At.UTC(),
 			Owes: w.Owes, Seen: w.Seen, Text: string(runes), Cut: w.Cut, Informs: w.Informs,
-			FromRun: w.FromRun, FromSeat: w.FromSeat,
+			FromRun: w.FromRun, FromSeat: w.FromSeat, Message: w.Message,
 		})
 		if marshalErr != nil {
 			return sandbox.SealedWake{}, fmt.Errorf("engine: sealing wake %s to turn %s: %w", w.ID, turnID,
@@ -151,7 +153,7 @@ func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (ste
 		ByKind: iam.ActorKind(body.ByKind), WorkingFor: body.WorkingFor, Conversation: body.Conversation,
 		Partition: body.Partition, Label: body.Label, OwesAnswer: body.OwesAnswer, At: body.At,
 		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut, Informs: body.Informs,
-		FromRun: body.FromRun, FromSeat: body.FromSeat}, true
+		FromRun: body.FromRun, FromSeat: body.FromSeat, Message: body.Message}, true
 }
 
 // sealOf is the seal a wake item's entry is opened in: another run's message's
@@ -364,18 +366,18 @@ func (s *runSteers) joined(ctx context.Context, ident runIdentity, items []opene
 	}
 	base := context.WithoutCancel(ctx)
 	claiming, claimed := context.WithTimeout(base, steerPublishBudget)
-	var triggers []string
+	var wakes []steer.Wake
 	for _, item := range items {
 		s.claim(claiming, ident, item.wakes)
-		for _, w := range item.wakes {
-			triggers = append(triggers, w.Triggers...)
-		}
+		wakes = append(wakes, item.wakes...)
 	}
 	claimed()
 	// AND A PERSON'S MESSAGE SHOWN QUEUED BEHIND THE SEAT is handed to the
-	// running work now: its line moves to the turn's own (queued.go).
-	if s.handedOver != nil && len(triggers) > 0 {
-		s.handedOver(base, ident.turn.AgentHandle, triggers)
+	// running work now: its line moves to the turn's own (queued.go), and its
+	// receipt says the running turn took it.
+	if s.handedOver != nil && len(wakes) > 0 {
+		s.handedOver(base, ident.turn.AgentHandle, tookWakes{turn: ident.turn.TurnID, as: chatlet.TakenJoined,
+			wakes: wakes})
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(base, steerPublishBudget)

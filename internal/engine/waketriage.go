@@ -21,10 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -255,8 +257,8 @@ func (e *Engine) triage(ctx context.Context, handle string, run sandbox.PendingR
 	}
 	requester := cmp.Or(run.Requester, run.RequesterLogin)
 	v, err := runTriage(ctx, deps, prompts.WakeTriage{Seat: handle, Task: run.TaskDescription,
-		Requester: requester, Wake: w, InConversation: rel.conversation, AboutItem: rel.item,
-		AboutWritten: rel.wrote, ByLead: rel.lead})
+		Requester: requester, Wake: w, Place: rel.place(), AboutItem: rel.item, AboutWritten: rel.wrote,
+		ByLead: rel.lead})
 	if err != nil {
 		return triageVerdict{failure: err.Error()}
 	}
@@ -265,8 +267,21 @@ func (e *Engine) triage(ctx context.Context, handle string, run sandbox.PendingR
 
 // wakeRelations is why a wake is weighed for a run at all: written in its
 // conversation, about its work item, about a record it created or wrote, or by
-// somebody who leads the seat.
-type wakeRelations struct{ conversation, item, wrote, lead bool }
+// somebody who leads the seat; and room, written elsewhere in the chat room
+// the run's conversation is in.
+type wakeRelations struct{ conversation, item, wrote, lead, room bool }
+
+// place is where the wake was written against the run's conversation, as the
+// triage is told it.
+func (r wakeRelations) place() prompts.WakePlace {
+	switch {
+	case r.conversation:
+		return prompts.PlaceHere
+	case r.room:
+		return prompts.PlaceRoom
+	}
+	return prompts.PlaceElsewhere
+}
 
 // relationsOf is o's relations to run on seat handle, wrote whether it is about
 // a record the run wrote ([wroteAbout]). The lead is the chart's answer
@@ -279,6 +294,8 @@ func (e *Engine) relationsOf(ctx context.Context, handle string, run sandbox.Pen
 		conversation: run.ConversationKey != "" && o.conversation == run.ConversationKey,
 		item:         sameItem(run.WorkItem, o.item),
 		wrote:        wrote,
+		room: o.room != "" && (run.ConversationKey == o.room ||
+			strings.HasPrefix(run.ConversationKey, o.room+":")),
 	}
 	if o.login == "" && o.requester != "" && o.requester != handle {
 		leads, err := ChartAuthorityOf(e).Leads(ctx, o.requester, handle)
@@ -318,15 +335,18 @@ const (
 	gateAbsorb
 )
 
-// wakeFacts is what the engine knows of a wake's writer and obligation, never
-// from the triage: whether the writer is the run's requester, a lead of the
-// seat (the chart) and a person, and whether the wake owes anything.
-type wakeFacts struct{ requester, lead, person, owes bool }
+// wakeFacts is what the engine knows of a wake, never from the triage: whether
+// its writer is the run's requester, a lead of the seat (the chart) and a
+// person; whether it owes anything; whether it was written in the run's own
+// conversation (here); whether it is a person's message to the seat
+// ([addressesSeat]); and whether its message can say a running turn took it
+// ([receiptOf]).
+type wakeFacts struct{ requester, lead, person, owes, here, addresses, marked bool }
 
 // gateOf is the engine's decision on v for a wake of facts (ADR-0168). Input
 // joins from anybody; a steer joins as a note only from a person who leads the
 // seat, and anybody else's is a request; a request waits; noise is absorbed
-// only owing nothing; a failure waits.
+// only where [absorbable]; a failure waits.
 func gateOf(v triageVerdict, f wakeFacts) gateAction {
 	switch {
 	case v.failed():
@@ -335,10 +355,30 @@ func gateOf(v triageVerdict, f wakeFacts) gateAction {
 		return gateJoin
 	case v.decision == triageSteer && f.lead && f.person:
 		return gateSteer
-	case v.decision == triageNoise && !f.owes:
+	case v.decision == triageNoise && absorbable(f):
 		return gateAbsorb
 	}
 	return gateStay
+}
+
+// absorbable reports noise the running work may absorb: owing nothing, written
+// in the run's own conversation, and, a person's message to the seat, one
+// whose message says so. NEVER FROM ANOTHER CONVERSATION: the run answers
+// nothing there, so the message would be dropped unseen.
+func absorbable(f wakeFacts) bool { return !f.owes && f.here && (!f.addresses || f.marked) }
+
+// addressesSeat reports a person's message that addresses the seat: one it
+// owes an answer ([owesAnything]: a mention, a direct message, a question put
+// to it) or a reply in a thread it follows ([notify.FollowingField]).
+func addressesSeat(ev *events.Event, person bool) bool {
+	if !person {
+		return false
+	}
+	if owesAnything(ev) {
+		return true
+	}
+	n, ok := events.DataAs[*types.ExternalNotification](ev)
+	return ok && n != nil && n.Metadata[notify.FollowingField] != ""
 }
 
 // owesAnything reports whether ev asks the seat for anything: an answer its
@@ -461,6 +501,8 @@ const (
 	stayTriageSpent = "triage_spent"  // the job weighed [maxJobTriages] already
 	stayNotLead     = "not_lead"      // a steer from somebody who does not lead the seat
 	stayOwes        = "owes"          // noise that owes an answer, so never absorbed
+	stayElsewhere   = "elsewhere"     // noise from another conversation, so never absorbed
+	stayUnmarked    = "unmarked"      // a person's noise whose message cannot say it was absorbed
 	stayRequest     = "request"       // asks for work of its own
 	stayNotesSpent  = "notes_spent"   // the turn took every note it takes
 	stayNoLedger    = "no_ledger"     // no completion ledger to record it worked in
@@ -502,8 +544,10 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 		memo.keep(job, id, v)
 		e.noteTriaged(ctx, handle, run, id, v)
 	}
-	facts := wakeFacts{requester: isRequester(run, o), lead: rel.lead,
-		person: o.login == "" && e.seatIsHuman(o.requester), owes: owesAnything(ev)}
+	person := o.login == "" && e.seatIsHuman(o.requester)
+	_, marked := receiptOf(ev)
+	facts := wakeFacts{requester: isRequester(run, o), lead: rel.lead, person: person, owes: owesAnything(ev),
+		here: rel.conversation, addresses: addressesSeat(ev, person), marked: marked}
 	switch gateOf(v, facts) {
 	case gateJoin:
 		w.Informs = !facts.requester
@@ -511,7 +555,7 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 	case gateSteer:
 		read.addSteer(run, o.requester, w)
 	case gateAbsorb:
-		e.absorbWake(ctx, handle, run, w, memo)
+		e.absorbWake(ctx, handle, run, w, ev, facts.addresses, memo)
 	default:
 		why := stayRequest
 		switch {
@@ -519,8 +563,12 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 			why = stayUndecided
 		case v.decision == triageSteer:
 			why = stayNotLead
-		case v.decision == triageNoise:
+		case v.decision == triageNoise && !facts.here:
+			why = stayElsewhere
+		case v.decision == triageNoise && facts.owes:
 			why = stayOwes
+		case v.decision == triageNoise:
+			why = stayUnmarked
 		}
 		// ANOTHER WRITER'S REQUEST IS PUT TO WHO MAY LET IT JOIN (foldin.go),
 		// and waits on their answer undecided.
@@ -565,15 +613,33 @@ func (e *Engine) fileJoin(ctx context.Context, handle string, run sandbox.Pendin
 }
 
 // absorbWake records noise owing nothing worked by run's turn ([runSteers.took],
-// under [absorbedKey]), so its delivery is skipped `absorbed` naming the turn.
-// A ledger that did not take it leaves it undecided, asked again next read.
+// under [absorbedKey]), so its delivery is skipped `absorbed` naming the turn;
+// mark says it is a person's message to the seat, whose receipt says so first.
+// A ledger or receipt that did not take it leaves it undecided, asked again
+// next read.
 func (e *Engine) absorbWake(ctx context.Context, handle string, run sandbox.PendingRun, w steer.Wake,
-	memo *routeMemo) {
+	ev *events.Event, mark bool, memo *routeMemo) {
 
 	if e.runSteers.completions == nil {
 		memo.mark(run.LaunchID, w.ID)
 		e.noteRouted(ctx, handle, run, w.ID, routeLeftQueued, ruleTriageNoise, stayNoLedger, nil)
 		return
+	}
+	// A PERSON'S MESSAGE TO THE SEAT, ITS RECEIPT FIRST: one that cannot say
+	// it was absorbed (gone, or keeping the seat none) waits for its own turn.
+	if mark {
+		switch err := e.markTaken(ctx, handle, run.TurnID, chatlet.TakenAbsorbed, w); {
+		case errors.Is(err, chatlet.ErrNotFound):
+			memo.mark(run.LaunchID, w.ID)
+			e.noteRouted(ctx, handle, run, w.ID, routeLeftQueued, ruleTriageNoise, stayUnmarked, nil)
+			e.tellWaiting(ctx, handle, ev, w.ID, true, runsAfterLine)
+			return
+		case err != nil:
+			log.WarnContext(ctx, "seat_wake_not_absorbed", "seat", handle, "turn_id", run.TurnID,
+				"wake_id", w.ID, "error", err.Error(),
+				"detail", "its message's receipt could not say so; the next read asks again")
+			return
+		}
 	}
 	if err := e.runSteers.took(ctx, handle, run.TurnID, absorbedKey, w); err != nil {
 		log.WarnContext(ctx, "seat_wake_not_absorbed", "seat", handle, "turn_id", run.TurnID, "wake_id", w.ID,
@@ -581,7 +647,7 @@ func (e *Engine) absorbWake(ctx context.Context, handle string, run sandbox.Pend
 		return
 	}
 	memo.mark(run.LaunchID, w.ID)
-	e.runSteers.handOver(ctx, handle, w)
+	e.runSteers.handOver(ctx, handle, run.TurnID, chatlet.TakenAbsorbed, w)
 	e.noteRouted(ctx, handle, run, w.ID, routeAbsorbed, ruleTriageNoise, "", nil)
 }
 
@@ -668,7 +734,7 @@ func (e *Engine) fileSteer(ctx context.Context, handle string, b *steerBurst, me
 						"not record its message worked: that message also runs as a turn of its own")
 			}
 			e.runSteers.seeThrough(ctx, handle, w)
-			e.runSteers.handOver(ctx, handle, w)
+			e.runSteers.handOver(ctx, handle, run.TurnID, chatlet.TakenJoined, w)
 			memo.mark(run.LaunchID, w.ID)
 			e.noteRouted(ctx, handle, run, w.ID, routeJoined, ruleTriageSteer, "", nil)
 		}
@@ -755,10 +821,11 @@ func (s *runSteers) took(ctx context.Context, handle, turnID string, mark func(s
 	return nil
 }
 
-// handOver tells the queued line w's deliveries went to the running work.
-func (s *runSteers) handOver(ctx context.Context, handle string, w steer.Wake) {
-	if s.handedOver != nil && len(w.Triggers) > 0 {
-		s.handedOver(context.WithoutCancel(ctx), handle, w.Triggers)
+// handOver tells the queued line w's deliveries went to turnID's running work,
+// taken as as ([runSteers.handedOver]).
+func (s *runSteers) handOver(ctx context.Context, handle, turnID string, as chatlet.Taken, w steer.Wake) {
+	if s.handedOver != nil {
+		s.handedOver(context.WithoutCancel(ctx), handle, tookWakes{turn: turnID, as: as, wakes: []steer.Wake{w}})
 	}
 }
 

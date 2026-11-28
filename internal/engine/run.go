@@ -1102,6 +1102,10 @@ type Engine struct {
 	// waitsTold is what each wake waiting behind a busy seat was told of why
 	// it waits, so a person is told each reason once (foldin.go).
 	waitsTold waitsTold
+	// receipts is where a running turn's take of a message is recorded on
+	// its receipt (wakereceipt.go); nil records through this node's chat
+	// writer ([Engine.chatHalves]).
+	receipts receiptTaker
 	// codeSearchWire is this node's code search scatter envelopes, both
 	// halves, and codeSearchLocal the answerer its own searches go to where it
 	// has no broker (codesearch.go).
@@ -1728,7 +1732,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// harness exists), and every late offer after it (steer.go).
 	steers.runs = e.runSteers
 	// A wake a run reads takes its message's queued line down (queued.go).
-	e.runSteers.telling(e.settleWaiting)
+	e.runSteers.telling(e.tookOver)
 	// The settles those records take off the path that took end with the node:
 	// each asks its store until it answers, no longer than this node's
 	// teardown, which is when its store goes. Every take is asked once more as
