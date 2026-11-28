@@ -437,13 +437,13 @@ func windowOf(scanned []activityRow, kept []activityRow, limit int) activityWind
 	return w
 }
 
-// mentionRows reads the moments the reader was named, by when.
+// mentionRows reads the moments somebody else named the reader, by when.
 func mentionRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 	after *activityKey, limit int) (activityWindow, error) {
 
 	const key = `('m:' || n.message_id)`
 	clause, cursorArgs := afterClause(after, "n.named_at", key)
-	args := append([]any{who}, cursorArgs...)
+	args := append([]any{who, who}, cursorArgs...)
 	args = append(args, who, limit+1)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT n.message_id, n.named_at, n.version, n.channel_id, c.name, c.kind,
@@ -451,7 +451,9 @@ func mentionRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 		  FROM chat_mentions n
 		  JOIN chat_messages m ON m.id = n.message_id
 		  JOIN chat_channels c ON c.id = n.channel_id
-		 WHERE n.handle = ?`+clause+` AND m.event = '' AND `+visibleWhere+`
+		 WHERE n.handle = ?
+		   AND (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')`+clause+`
+		   AND m.event = '' AND `+visibleWhere+`
 		 ORDER BY n.named_at DESC, `+key+` DESC
 		 LIMIT ?`, args...)
 	if err != nil {
@@ -462,13 +464,14 @@ func mentionRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 }
 
 // collectiveRows reads the messages that named the whole of a room the reader
-// is in: `@channel`, which names nobody in `chat_mentions`.
+// is in: `@channel`, which names nobody in `chat_mentions`. One that also
+// names the reader is listed once, by [mentionRows].
 func collectiveRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 	after *activityKey, limit int) (activityWindow, error) {
 
 	const key = `('m:' || m.id)`
 	clause, cursorArgs := afterClause(after, "m.created_at", key)
-	args := append([]any{who, who}, cursorArgs...)
+	args := append([]any{who, who, who}, cursorArgs...)
 	args = append(args, who, limit+1)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT m.id, m.created_at, m.version, m.channel_id, c.name, c.kind,
@@ -478,7 +481,9 @@ func collectiveRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMar
 		  JOIN chat_channels c ON c.id = m.channel_id
 		 WHERE mb.handle = ? AND (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
 		   AND m.deleted_at IS NULL
-		   AND m.event = ''`+clause+` AND `+visibleWhere+`
+		   AND m.event = ''
+		   AND NOT EXISTS (SELECT 1 FROM chat_mentions n
+		                    WHERE n.message_id = m.id AND n.handle = ?)`+clause+` AND `+visibleWhere+`
 		 ORDER BY m.created_at DESC, `+key+` DESC
 		 LIMIT ?`, args...)
 	if err != nil {
@@ -490,8 +495,8 @@ func collectiveRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMar
 
 // replyRows reads the replies in the threads the reader follows: the threads
 // they spoke or were named in, and those they followed by hand, less those
-// they unfollowed. A reply that names them is the mention's, and one they
-// wrote is not news to them.
+// they unfollowed. A reply that names them or the whole room is the
+// mention's, and one they wrote is not news to them.
 func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 	after *activityKey, limit int) (activityWindow, error) {
 
@@ -511,7 +516,7 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 
 	// THE THREADS THE CONVERSATION SAYS THEY ARE IN, in one statement over
 	// the two handle indexes.
-	args := append([]any{who, who, who, who}, cursorArgs...)
+	args := append([]any{who, who, who, who, who}, cursorArgs...)
 	args = append(args, who, limit+1)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT m.id, m.created_at, m.version, m.channel_id, c.name, c.kind,
@@ -524,7 +529,7 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 		    ON m.channel_id = t.channel_id AND m.thread_root = t.thread_root
 		  JOIN chat_channels c ON c.id = m.channel_id
 		 WHERE (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
-		   AND m.deleted_at IS NULL AND m.event = ''
+		   AND m.deleted_at IS NULL AND m.event = '' AND `+notCollectiveOfMember+`
 		   AND NOT EXISTS (SELECT 1 FROM chat_mentions n
 		                    WHERE n.message_id = m.id AND n.handle = ?)`+clause+`
 		   AND `+visibleWhere+`
@@ -544,7 +549,7 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 	// a mark is a deliberate gesture, there are at most [MaxReaderMarks] of
 	// them and few are of a thread nobody named the reader in.
 	for _, thread := range marks.Following {
-		args := append([]any{thread.ChannelID, thread.RootID, who, who}, cursorArgs...)
+		args := append([]any{thread.ChannelID, thread.RootID, who, who, who}, cursorArgs...)
 		args = append(args, who, limit+1)
 		rows, err := tx.QueryContext(ctx, `
 			SELECT m.id, m.created_at, m.version, m.channel_id, c.name, c.kind,
@@ -553,7 +558,7 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 			  JOIN chat_channels c ON c.id = m.channel_id
 			 WHERE m.channel_id = ? AND m.thread_root = ?
 			   AND (m.author_handle <> ? OR m.author_kind = '`+string(AuthorSystem)+`')
-			   AND m.deleted_at IS NULL AND m.event = ''
+			   AND m.deleted_at IS NULL AND m.event = '' AND `+notCollectiveOfMember+`
 			   AND NOT EXISTS (SELECT 1 FROM chat_mentions n
 			                    WHERE n.message_id = m.id AND n.handle = ?)`+clause+`
 			   AND `+visibleWhere+`
@@ -579,6 +584,12 @@ func replyRows(ctx context.Context, tx *sql.Tx, who string, marks ReaderMarks,
 	}
 	return windowOf(scanned, kept, limit), nil
 }
+
+// notCollectiveOfMember keeps a reply unless it named the whole of a room the
+// reader is in, which [collectiveRows] lists as the mention. One bind: the
+// reader.
+const notCollectiveOfMember = `(m.collective = 0 OR NOT EXISTS (SELECT 1 FROM chat_members cm
+		  WHERE cm.channel_id = m.channel_id AND cm.handle = ?))`
 
 // dedupeRows sorts rows in the feed's order and keeps one of each key.
 func dedupeRows(rows []activityRow) []activityRow {
