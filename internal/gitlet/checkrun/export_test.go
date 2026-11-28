@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // Reported is what a report read into an ending's failures holds: the
@@ -82,3 +83,14 @@ func SummaryOf(s string) string { return summaryOf(s) }
 
 // AttemptRecord is attempt as a check's box records it.
 func AttemptRecord(attempt gitlet.CheckKey) (string, error) { return attemptRecord(attempt) }
+
+// KeepLogAndTail keeps logBox's output as a failed run's log within limit, as a
+// run's ending does, and reads tailBox's into its summary, counting what it
+// withholds into rec.
+func KeepLogAndTail(ctx context.Context, logBox, tailBox sandbox.Sandbox, logs Uploader, limit int64,
+	rec *metrics.Recorder) (*gitlet.CheckLog, string, string) {
+	a := attemptOf(gitlet.CheckDef{}, "web", logs)
+	a.r.o.Metrics = rec
+	log, why := a.keepLogWithin(ctx, logBox, limit)
+	return log, why, a.tail(ctx, tailBox).text
+}

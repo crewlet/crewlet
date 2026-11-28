@@ -321,7 +321,7 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		}
 	}
 	held := SessionTakeBudget + 2*sessionRecordBudget + coord.MaxValueReadCrossing + MediaReadersRoom +
-		3*discardGrace + boxReadChanges*coord.MaxValueCrossing + MainThreadReadWait
+		3*discardGrace + boxReadChanges*coord.MaxValueCrossing + MainThreadReadWait + CollectReadWait
 	for name, tc := range map[string]struct {
 		run  PendingRun
 		held time.Duration

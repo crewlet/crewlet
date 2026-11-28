@@ -282,20 +282,20 @@ func holdShapes(n int) map[string]string {
 	}
 }
 
-// A STREAM'S END, AND ITS LIVE VIEW, ARE THE END OF ITS WHOLE REDACTION over
-// the hold shapes too: what each shows of a stream read from inside, with
-// [redact.LookBack] before it, is how the whole stream's redaction ends. The
-// live view's shapes hold runs shorter than that context, as every
-// credential but a key's block is; the error stream's run past it.
+// A FAILURE'S TAIL, AND A LIVE VIEW, ARE THE END OF THE WHOLE REDACTION over
+// the hold shapes too: what a failure shows of a stream read from its start,
+// and a live view of one read from inside with [redact.LookBack] before it, is
+// how the whole stream's redaction ends. The live view's shapes hold runs
+// shorter than that context, as every credential but a key's block is; the
+// error stream's run past it.
 func TestAStreamsEndAndItsLiveViewAreTheEndOfItsWholeRedaction(t *testing.T) {
 	t.Parallel()
 	for name, text := range holdShapes(512 << 10) {
 		whole := redact.Secrets(text)
 		for _, keep := range []int{16 << 10, 64 << 10} {
-			data := text[len(text)-(keep+redact.LookBack):]
-			end, _ := streamEnd(sandbox.FileTail{Data: []byte(data), Size: int64(len(text))}, keep)
-			if end = strings.TrimPrefix(end, sandbox.KeepEndMark); !strings.HasSuffix(whole, end) {
-				t.Errorf("%s at %d: the stream's end shows %.120q, which the whole redaction does not end on",
+			end := strings.TrimPrefix(failureTailOf(t, text, keep).shown, sandbox.KeepEndMark)
+			if !strings.HasSuffix(whole, end) {
+				t.Errorf("%s at %d: a failure's tail shows %.120q, which the whole redaction does not end on",
 					name, keep, end)
 			}
 		}

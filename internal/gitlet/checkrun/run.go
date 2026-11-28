@@ -554,10 +554,13 @@ type outputTail struct {
 // lines (sandbox.KeepEnd) of what the read's first redact.LookBack bytes settle (redact.SettledEnd),
 // read that much past the tail. Only a last line longer than the tail is kept in part, its end, and
 // cut; a read begun inside one line that runs to the end shows nothing. The zero value where it
-// cannot be read.
+// cannot be read, or was not read whole as one version of the output (sandbox.ChangeOf).
 func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) outputTail {
-	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes+redact.LookBack)
-	if err != nil {
+	t, changed, ok := readEnd(ctx, box, gitlet.CheckTailBytes+redact.LookBack)
+	if changed {
+		a.r.withheld(withheldTail, sandbox.WithheldChanged)
+	}
+	if !ok {
 		return outputTail{}
 	}
 	behind := 0
@@ -575,6 +578,30 @@ func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) outputTail {
 	}
 	taken := strings.Count(read, "\n") - strings.Count(redact.Secrets(read), "\n")
 	return outputTail{text: text, size: t.Size, cut: cut, taken: taken}
+}
+
+// readEnd is the output's last n bytes and its size, read whole from one open
+// and as one version of the output: not ok where the box would not hand them
+// over, or, changed, the output was cut, grown or written over while they were
+// read.
+func readEnd(ctx context.Context, box sandbox.Sandbox, n int) (t sandbox.FileTail, changed, ok bool) {
+	rc, size, err := box.OpenTail(ctx, outputFile, int64(n))
+	if err != nil {
+		return sandbox.FileTail{}, false, false
+	}
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return sandbox.FileTail{}, false, false
+	}
+	change, err := sandbox.ChangeOf(rc)
+	if err != nil {
+		return sandbox.FileTail{}, false, false
+	}
+	if int64(len(data)) != min(size, int64(n)) || change != sandbox.FileUnchanged {
+		return sandbox.FileTail{}, true, false
+	}
+	return sandbox.FileTail{Data: data, Size: size}, false, true
 }
 
 // lines is how many lines the run's output had when t was read, as its tail numbers them: its

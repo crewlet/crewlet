@@ -2949,6 +2949,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// Each collected launch's verdict on its session, counted and judged
 		// against session_carry. See sessionmeter.go.
 		Carries: sessionMeter{metrics: e.metrics, objectives: e.objectives},
+		// And each piece its reads of a box refused or did not show, counted
+		// by why. See collectmeter.go.
+		Collects: collectMeter{metrics: e.metrics},
 		// And each turn's conversation told what its runs' sessions lost, on the
 		// engine's own chat. See conversationnotice.go.
 		Conversations: conversationNotice{engine: e},

@@ -112,9 +112,9 @@ func followFrom(t *testing.T, text string, at int) string {
 
 // A READING HOLDS THE REDACTION'S LOOK-BACK BEFORE ITS FIRST LINE
 // ([redact.LookBack]: a key's armour and the stages' reach). The live view in
-// three piecings, a stream's end and the error stream's reading through
-// [Runner.Follow] each show the end of the whole stream's redaction and the
-// log after it.
+// three piecings and the error stream's reading through [Runner.Follow] each
+// show the end of the whole stream's redaction and the log after it, as a
+// failure's tail, read from the stream's start, does.
 //
 // Mutation: hold a block's reach (redact.MaxKeyBlockBytes) as the context, or
 // the keys' stage's reach alone, and the case goes red.
@@ -138,9 +138,7 @@ func TestAReadingHoldsTheRedactionsLookBackBeforeItsFirstLine(t *testing.T) {
 			for _, mode := range []string{"whole", "lines", "pieces"} {
 				check(t, s, whole, "the live view in "+mode, readLiveFrom(r, s.text, s.at, mode))
 			}
-			data := s.text[max(0, s.at-redact.LookBack):]
-			end, _ := streamEnd(sandbox.FileTail{Data: []byte(data), Size: int64(len(s.text))}, len(s.text)-s.at)
-			check(t, s, whole, "the stream's end", end)
+			check(t, s, whole, "a failure's tail", failureTailOf(t, s.text, len(s.text)-s.at).shown)
 
 			text := s.text + strings.Repeat("ok\n", liveWindow/3+1)
 			check(t, s, redact.Secrets(text), "the error stream's reading", followFrom(t, text, s.at))

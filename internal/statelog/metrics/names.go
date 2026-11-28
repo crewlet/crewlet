@@ -45,6 +45,7 @@ const (
 	CodeChecksFinished               = "crewlet.code.checks.finished"
 	CodeChecksQueued                 = "crewlet.code.checks.queued"
 	CodeChecksRunning                = "crewlet.code.checks.running"
+	CodeChecksWithheld               = "crewlet.code.checks.withheld"
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
 	CodeCommitBusy                   = "crewlet.code.commit.busy"
 	CodeCompactBehind                = "crewlet.code.compact.behind"
@@ -221,6 +222,7 @@ const (
 
 	ExecutorSessionNotContinued = "crewlet.executor.session.not_continued"
 	ExecutorSessionTrimmed      = "crewlet.executor.session.trimmed"
+	ExecutorCollectWithheld     = "crewlet.executor.collect.withheld"
 
 	ExecutorHomeCuts = "crewlet.executor.home.cuts"
 )

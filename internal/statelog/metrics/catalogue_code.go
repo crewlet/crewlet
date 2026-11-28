@@ -237,6 +237,20 @@ func codeInstruments() []Instrument {
 				"nodes run too few containers for its checks.",
 		},
 		{
+			Name: CodeChecksWithheld, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"piece", "reason"},
+			Shows: "Pieces of a failed check's output this Gitlet node's runner did " +
+				"not keep or show, by `piece` (`log`, the log kept in the object " +
+				"store; `tail`, its summary's end) and `reason`, the reasons " +
+				"`crewlet.executor.collect.withheld` gives (`changed`, the output " +
+				"was cut, grown or written over while it was read; `refused`, the " +
+				"redaction stream refused its text; `unsettled`, no line of its " +
+				"end could be redacted as the whole output is; `too_large`, its " +
+				"last line, redacted, is past what a log keeps). The check's " +
+				"summary says each. `changed` above zero is something in a box " +
+				"still writing after its check's command ended.",
+		},
+		{
 			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Shows: "How long the checks this Gitlet node's runner ran took, from " +
 				"the claim to the ending it recorded — the container's making " +

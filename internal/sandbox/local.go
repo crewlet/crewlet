@@ -132,6 +132,10 @@ type boxLayout struct {
 	// in production. On the layout because the layout is the one value every
 	// teardown holds (Close, Kill, the orphan reaper, a reconnected box).
 	credentialSteps hostbox.CredentialSteps
+	// statTaken observes each read's open once the one stat that sizes it
+	// and that its change check compares with is taken ([boxLayout.opened]):
+	// nil in production, a test's writer growing the file there.
+	statTaken func(f *os.File)
 }
 
 // home is the box's own side: its HOME, and its mount in container mode.

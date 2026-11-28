@@ -132,3 +132,28 @@ func TestARunnersArtifactFilesAndDirectoriesAreDisjoint(t *testing.T) {
 		t.Fatal("no registered runner names both files and directories, so nothing was held")
 	}
 }
+
+// EACH JOB WRITES ITS STREAMS AS NEW FILES: the clear removes the error stream
+// and the event stream with the rest, so the next job's `>` and `2>` make new
+// files rather than cut the last job's under a read of it still under way,
+// which would then join two jobs' bytes ([sandbox.ChangeOf]).
+//
+// Mutation: leave either stream out of the clear.
+func TestEachJobWritesItsStreamsAsNewFiles(t *testing.T) {
+	t.Parallel()
+	for _, r := range []*Runner{NewClaudeCode(), NewOpenCode()} {
+		box := sandbox.NewFakeSandbox("box-1")
+		p := PathsFor(box)
+		if err := r.ClearArtifacts(t.Context(), box); err != nil {
+			t.Fatalf("%s: ClearArtifacts: %v", r.Name(), err)
+		}
+		execs := box.Execs()
+		clear := execs[len(execs)-1].Command
+		files, _, _ := strings.Cut(strings.TrimPrefix(clear, "rm -f "), "; rm -rf ")
+		for _, path := range []string{p.Err(), r.harness.Output(p).Stdout} {
+			if !slices.Contains(strings.Fields(files), shellword.Quote(path)) {
+				t.Errorf("%s's clear leaves %s for the next job to write into:\n%s", r.Name(), path, clear)
+			}
+		}
+	}
+}

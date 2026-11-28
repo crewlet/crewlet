@@ -293,6 +293,10 @@ type transcriptLines struct {
 	held int
 	// live is set once a live reading took entries: held raw always.
 	live bool
+	// unended says the stream was still being written when its reading
+	// ended: the transcript keeps only what its redaction made final
+	// ([transcriptLines.settled]).
+	unended bool
 	// hold is [transcriptHoldBytes] where zero; a suite lowers it.
 	hold int
 	// newStream is [redact.NewStream] where nil; a suite injects a refusal.
@@ -402,6 +406,9 @@ func (t *transcriptLines) flushSkipped() {
 // stream wrote is kept.
 func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 	t.flushSkipped()
+	if t.unended {
+		return t.settled()
+	}
 	if t.stream == nil {
 		return strings.Join(t.lines, "\n"), 0, 0
 	}
@@ -412,6 +419,37 @@ func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 	note := activityline.Words(activityline.TagNote, fmt.Sprintf("the run's transcript, %d line(s), %s, is "+
 		"not kept: its text could not be redacted in one pass", lines, humanSize(int64(t.fedBytes))))
 	return note, lines, t.fedBytes
+}
+
+// flushingStream is a redaction stream that answers how much of what it wrote
+// is final ([redact.Stream.Flush]).
+type flushingStream interface {
+	Flush() (final int64, held int, err error)
+}
+
+// settled is the transcript of a stream still being written
+// ([transcriptLines.unended]): only what its redaction made final, which
+// nothing written after can change, to its last whole line; a note in its
+// place where that cannot be kept. Streamed past its hold, that is what the
+// redaction stream says is final of what it wrote ([redact.Stream.Flush]).
+func (t *transcriptLines) settled() (text string, elidedLines, elidedBytes int) {
+	lines, size := len(t.lines), t.held
+	if t.stream == nil {
+		// HELD WHOLE, raw, to be redacted with the rest of the result: cut at
+		// what [redact.Settled] settles, whose redaction nothing after it can
+		// change.
+		text := strings.Join(t.lines, "\n") + "\n"
+		return strings.TrimSuffix(text[:redact.Settled(text)], "\n"), 0, 0
+	} else if f, ok := t.stream.(flushingStream); ok {
+		lines, size = t.fedBreaks+1, t.fedBytes
+		if final, _, err := f.Flush(); err == nil && final > 0 && t.halves.Cut(int(final)) {
+			return t.halves.Bounded()
+		}
+	}
+	note := activityline.Words(activityline.TagNote, fmt.Sprintf("the run's transcript, %d line(s), %s, is "+
+		"not kept: its event stream was still being written, and its redaction had not settled", lines,
+		humanSize(int64(size))))
+	return note, lines, size
 }
 
 // take hands over the entries added since the last take and forgets them,
@@ -428,38 +466,6 @@ func (t *transcriptLines) take(end bool) []string {
 	lines := t.lines
 	t.lines, t.held = nil, 0
 	return lines
-}
-
-// streamEnd is the end of a stream a person or model can be shown: at most
-// keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
-// first, and how many stream bytes came before it. tail is the stream's end
-// read [redact.LookBack] past keep, or the whole stream.
-//
-// SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
-// bytes alone, the end could reach back into the context when redaction shrank
-// what followed, and be redacted without what decides it. A read opened inside
-// a line running to the end has no line it opens to show, so it shows nothing,
-// and every byte is counted.
-func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
-	ctx := 0
-	if tail.Before() > 0 {
-		ctx = redact.LookBack
-	}
-	kept, at := settledEnd(string(tail.Data), ctx, keep)
-	return kept, tail.Before() + int64(at)
-}
-
-// settledEnd is the redacted end of text that its first ctx bytes settle
-// ([redact.SettledEnd]), at most keep bytes of it as [sandbox.KeepEnd] keeps
-// them, and how much came before it: in text's bytes up to the settled start,
-// in redacted bytes past it, as [failureDetail] counts what it cuts.
-func settledEnd(text string, ctx, keep int) (string, int) {
-	end, at := redact.SettledEnd(text, ctx)
-	if end == "" {
-		return "", at
-	}
-	kept, k := sandbox.KeepEnd(end, keep)
-	return kept, at + k
 }
 
 // humanSize renders a byte count as a reader would say it.

@@ -25,15 +25,20 @@ import (
 // [TestEveryBoxReadsWholeUpToMaxFileBytes]'s.
 func TestTheFakeKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(*testing.T) sandbox.Sandbox {
-		return sandbox.NewFakeSandbox("box-1").CapReads(sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(*testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box := sandbox.NewFakeSandbox("box-1")
+		return box.CapReads(sandboxtest.ReadCap), sandboxtest.InPlace{
+			Append:   func(_ *testing.T, path string, more []byte) { box.AppendInPlace(path, more) },
+			Truncate: func(_ *testing.T, path string, n int64) { box.TruncateInPlace(path, int(n)) },
+		}
 	})
 }
 
 func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(directBox(t), sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(t *testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box := directBox(t)
+		return sandbox.CapReads(box, sandboxtest.ReadCap), hostEdits(box.Home(), box.Home())
 	})
 }
 
@@ -41,9 +46,33 @@ func TestADirectBoxKeepsTheFileContract(t *testing.T) {
 // contract is certified there; what the container itself does is local_test's.
 func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
-	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
-		return sandbox.CapReads(containerBox(t), sandboxtest.ReadCap)
+	sandboxtest.Box(t, func(t *testing.T) (sandbox.Sandbox, sandboxtest.InPlace) {
+		box, home := sandbox.NewContainerBoxAt(t.TempDir())
+		return sandbox.CapReads(box, sandboxtest.ReadCap), hostEdits(box.Home(), home)
 	})
+}
+
+// hostEdits edits a local box's files in place on the engine host, a box path
+// under boxHome being the host path under hostHome.
+func hostEdits(boxHome, hostHome string) sandboxtest.InPlace {
+	at := func(path string) string { return hostHome + strings.TrimPrefix(path, boxHome) }
+	return sandboxtest.InPlace{
+		Append: func(t *testing.T, path string, more []byte) {
+			f, err := os.OpenFile(at(path), os.O_WRONLY|os.O_APPEND, 0)
+			if err == nil {
+				_, err = f.Write(more)
+				err = errors.Join(err, f.Close())
+			}
+			if err != nil {
+				t.Fatalf("appending to %s: %v", path, err)
+			}
+		},
+		Truncate: func(t *testing.T, path string, n int64) {
+			if err := os.Truncate(at(path), n); err != nil {
+				t.Fatalf("truncating %s: %v", path, err)
+			}
+		},
+	}
 }
 
 // A LOCAL BOX'S RANGE ENDS AT THE SIZE ITS OPEN ANSWERED, though the file grows
@@ -275,4 +304,80 @@ func directBox(t *testing.T) sandbox.Sandbox {
 func containerBox(t *testing.T) sandbox.Sandbox {
 	box, _ := sandbox.NewContainerBoxAt(t.TempDir())
 	return box
+}
+
+// A LOCAL BOX TELLS A FILE WRITTEN OVER IN PLACE AT ITS SIZE, its
+// modification time put back: the same inode, the same length, new bytes, and
+// the modification time it had at the open, as `touch -r` leaves it. The
+// change time, which no user sets, tells it; so it does of a file given a
+// second link first, since only a link FALLING (the clear's unlink) leaves the
+// change time unread.
+//
+// Mutations, each red: compare only the file's size and modification time to
+// the open's; leave the change time unread whenever the link count moves.
+func TestALocalBoxTellsAFileWrittenOverInPlace(t *testing.T) {
+	t.Parallel()
+	for _, linked := range []bool{false, true} {
+		testALocalBoxTellsAFileWrittenOverInPlace(t, linked)
+	}
+}
+
+func testALocalBoxTellsAFileWrittenOverInPlace(t *testing.T, linked bool) {
+	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
+		"direct": func(t *testing.T) (sandbox.Sandbox, string) {
+			box := directBox(t)
+			return box, box.Home()
+		},
+		"container": func(t *testing.T) (sandbox.Sandbox, string) {
+			return sandbox.NewContainerBoxAt(t.TempDir())
+		},
+	} {
+		if linked {
+			name += " linked"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box, home := fresh(t)
+			path := box.Home() + "/.crewlet/over.log"
+			if err := box.WriteFile(t.Context(), path, bytes.Repeat([]byte("a"), 1000)); err != nil {
+				t.Fatal(err)
+			}
+			r, _, err := box.OpenRange(t.Context(), path, 0, math.MaxInt64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			if _, err = io.ReadAll(r); err != nil {
+				t.Fatal(err)
+			}
+			host := home + strings.TrimPrefix(path, box.Home())
+			if linked {
+				if err := os.Link(host, host+".link"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.Stat(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.OpenFile(host, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteAt(bytes.Repeat([]byte("b"), 1000), 0)
+			if err = errors.Join(err, f.Close()); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(host, before.ModTime(), before.ModTime()); err != nil {
+				t.Fatal(err)
+			}
+			if after, err := os.Stat(host); err != nil || !after.ModTime().Equal(before.ModTime()) {
+				t.Fatalf("the modification time was not put back: %v", err)
+			}
+			if got, err := sandbox.ChangeOf(r); err != nil || got != sandbox.FileChanged {
+				t.Errorf("a file (linked again first: %t) written over in place at its size tells %q (%v), "+
+					"want %q", linked, got, err, sandbox.FileChanged)
+			}
+		})
+	}
 }

@@ -2,22 +2,24 @@ package executor
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A COLLECTION DECODES A LONG TEXT ONCE, from the bytes as read ([wireAlias]):
-// a result line's parse, the stream's assistant line; a result line on the
-// stream that succeeded decodes none of it, unparseable output only its end
-// ([unparsedFailure]). Each allocates what the text's own decode does, measured
-// beside it; a copy of the line or of a raw value is more. BoxReadHeldBytes in
-// internal/sandbox counts on it. Bytes allocated, so a copy shows however soon
-// it is let go; not parallel, the counts being the process's.
+// a result line's parse, the stream's assistant line; a succeeded result line
+// on the stream decodes none of it, unparseable output is redacted alone
+// ([unparsedFailure]). Each allocates what its decode or redaction does,
+// measured beside it; a copy of the line or of a raw value is more, which
+// BoxReadHeldBytes in internal/sandbox counts on. Bytes allocated, so a copy
+// shows however soon it is let go; not parallel, the counts being the process's.
 //
 // Mutations, each red: decode the result, the event, its message or a block
 // with wireDecode; convert the result to a string and back before decoding it;
@@ -40,12 +42,18 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 		`"parent_tool_use_id":null}`)
 	unparseable := []byte(strings.ReplaceAll(text, "\n", " ") + "\nError: token expired")
 	// slack is what a reading allocates beside its text: a decoder, the
-	// result's few strings, an unparseable output's end and the sentence
-	// around it ([unparsedShownBytes] and its redaction's look back, twice).
+	// result's few strings, an unparseable output's end, the ring that keeps
+	// it and the sentence around it ([unparsedShownBytes], four times).
 	const slack = 4*unparsedShownBytes + 1<<20
 	// decode is the text's own decode, in this build: under the race detector a
 	// pool drops buffers, and the decode allocates more.
 	_, decode := allocationsOf(t, func() { _ = looseString(quoted) })
+	// redaction is the unparseable output's own redaction, through one stream.
+	_, redaction := allocationsOf(t, func() {
+		s := redact.NewStream(io.Discard)
+		_, _ = s.Write(unparseable)
+		_ = s.Close()
+	})
 	// holding is a decoder whose transcript holds the text as it is, so what
 	// is counted is the line's decode, not its redaction's stream.
 	holding := func() *claudeEvents {
@@ -56,33 +64,30 @@ func TestACollectionDecodesALongTextOnce(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		read    func()
-		decodes bool
+		decodes uint64
 	}{
-		{"a result line's parse", func() { _ = ClaudeCode{}.Parse(succeeded) }, true},
-		{"a failed result line's parse", func() { _ = ClaudeCode{}.Parse(failed) }, true},
-		{"the stream's assistant line", func() { holding().Line(assistant) }, true},
-		{"the stream's result line of a run that succeeded", func() { (&claudeEvents{}).Line(succeeded) }, false},
-		{"unparseable output's parse", func() { _ = ClaudeCode{}.Parse(unparseable) }, false},
+		{"a result line's parse", func() { _ = ClaudeCode{}.Parse(succeeded) }, decode},
+		{"a failed result line's parse", func() { _ = ClaudeCode{}.Parse(failed) }, decode},
+		{"the stream's assistant line", func() { holding().Line(assistant) }, decode},
+		{"the stream's result line of a run that succeeded", func() { (&claudeEvents{}).Line(succeeded) }, 0},
+		{"unparseable output's parse", func() { _ = ClaudeCode{}.Parse(unparseable) }, redaction},
 	} {
-		limit := uint64(slack)
-		if c.decodes {
-			limit += decode
-		}
+		limit := uint64(slack) + c.decodes
 		if _, allocated := allocationsOf(t, c.read); allocated > limit {
-			t.Errorf("%s allocated %d bytes for a text of %d, past its decode (%d if it decodes it) and %d beside it",
-				c.name, allocated, len(text), decode, slack)
+			t.Errorf("%s allocated %d bytes for a text of %d, past its decode or redaction (%d) and %d beside it",
+				c.name, allocated, len(text), c.decodes, slack)
 		}
 	}
 }
 
-// THE STREAM'S LAST LINE IS KEPT ONLY WHERE IT STANDS IN FOR THE RESULT FILE:
-// an empty or refused file of its own beside the stream, for which
-// [Runner.Collect] reads the stream again. Kept on every collection, a 32 MiB
-// result line would be held a second time beside the file's own copy. A
-// stream read without keeping keeps nothing.
+// THE STREAM'S LAST LINE STANDS IN FOR THE RESULT FILE ONLY WHERE THE FILE IS
+// EMPTY OR REFUSED, of a harness that keeps one of its own beside the stream,
+// whose collection marks the line as it reads the stream ([Output.keepsLast]):
+// a harness whose result is its stream keeps none. A stream read without
+// keeping keeps nothing.
 //
-// Mutations, each red: keep the line whatever the file held; keep it for a
-// harness whose result is its stream; keep it on a read that did not ask.
+// Mutations, each red: stand the line in whatever the file held; keep it for
+// a harness whose result is its stream; keep it on a read that did not ask.
 func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -106,6 +111,12 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 		if got := c.out.lastLineStandsIn(c.refusal, []byte(c.raw)); got != c.want {
 			t.Errorf("%s: the stream's last line stands in = %t, want %t", c.name, got, c.want)
 		}
+		if c.want && !c.out.keepsLast() {
+			t.Errorf("%s: the line stands in, but its collection keeps none", c.name)
+		}
+	}
+	if openCode.keepsLast() {
+		t.Error("a harness whose result is its stream keeps its stream's last line")
 	}
 
 	runner := NewClaudeCode()
@@ -115,12 +126,13 @@ func TestTheStreamsLastLineIsKeptOnlyWhereItStandsInForTheResultFile(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		read, _, err := runner.decodeStream(stream, keep)
+		read, _, err := runner.decodeStream(t.Context(), stream, keep)
+		stream.close()
 		if err != nil {
 			t.Fatalf("decodeStream: %v", err)
 		}
 		if read.last.said() != keep {
-			t.Errorf("a stream read keeping its last line %t kept %q", keep, read.last.line)
+			t.Errorf("a stream read keeping its last line %t marked %+v", keep, read.last)
 		}
 	}
 }

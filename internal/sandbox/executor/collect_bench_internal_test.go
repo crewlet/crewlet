@@ -22,19 +22,21 @@ import (
 // [sandbox.BoxReadHeldBytes] states. A case is a real local box holding a
 // harness's files: Claude Code's stream (the final message's line, then the
 // result line) and the result file `tail -n 1` copies, or OpenCode's stream;
-// each text holds a credential, so redaction rewrites it. held-MiB is the most
-// heap in use above the heap before, sampled throughout at GOGC=1, so it counts
-// what is live; x-input is that over the bytes the box held, x-file over the
-// file bound.
+// each text holds a credential, so redaction rewrites it. An `_and_errors`
+// case adds an error stream of [benchCollectErrBytes] its failure shows.
+// held-MiB is the most heap in use above the heap before, sampled throughout
+// at GOGC=1, so it counts what is live; x-input is that over the bytes the box
+// held, x-file over the file bound.
 //
 //	go test -run '^$' -bench '^BenchmarkACollectionAtItsBounds$/^<case>$' -benchtime 1x ./internal/sandbox/executor/
 func BenchmarkACollectionAtItsBounds(b *testing.B) {
 	// files is what a case's box holds: OpenCode's stream is its result file.
-	type files struct{ stream, result, findings, exit string }
+	type files struct{ stream, result, findings, exit, errs string }
 	// Each case's files are made inside it, written and dropped before it
 	// measures, so the heap it measures against holds none of them.
 	text := func() string { return benchCollectText(benchCollectTextBytes, "\n") }
 	line := func() string { return benchCollectText(benchCollectTextBytes, " ") }
+	errs := func() string { return benchCollectText(benchCollectErrBytes, "\n") }
 	result := func(b *testing.B, failed string) string {
 		return `{"type":"result","subtype":"success","is_error":` + failed + `,"result":` + benchQuoted(b, text()) +
 			`,"session_id":"9a8b7c6d-0000-4000-8000-000000000002","num_turns":3,"total_cost_usd":0.5,` +
@@ -80,6 +82,13 @@ func BenchmarkACollectionAtItsBounds(b *testing.B) {
 		{"oc_answer", NewOpenCode, answer(false)},
 		{"oc_plain", NewOpenCode, func(*testing.B) files { return files{result: line() + "\n", exit: "1"} }},
 		{"oc_answer_and_findings", NewOpenCode, answer(true)},
+		{"cc_unparseable_and_errors", NewClaudeCode, func(*testing.B) files {
+			l := line() + "\n"
+			return files{stream: l, result: l, exit: "1", errs: errs()}
+		}},
+		{"oc_plain_and_errors", NewOpenCode, func(*testing.B) files {
+			return files{result: line() + "\n", exit: "1", errs: errs()}
+		}},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			runner := bc.runner()
@@ -96,11 +105,11 @@ func BenchmarkACollectionAtItsBounds(b *testing.B) {
 			f := bc.files(b)
 			input := 0
 			for at, body := range map[string]string{p.Stream(): f.stream, p.Result(): f.result,
-				p.Findings(): f.findings, p.ExitCode(): f.exit} {
+				p.Findings(): f.findings, p.ExitCode(): f.exit, p.Err(): f.errs} {
 				if body == "" {
 					continue
 				}
-				if len(body) > sandbox.MaxFileBytes && at != p.Stream() {
+				if len(body) > sandbox.MaxFileBytes && at != p.Stream() && at != p.Err() {
 					b.Fatalf("the case's %s is %d bytes, past the %d a box reads whole", at, len(body),
 						sandbox.MaxFileBytes)
 				}
@@ -135,6 +144,10 @@ func BenchmarkACollectionAtItsBounds(b *testing.B) {
 // benchCollectTextBytes is each case's text: what a line holding it quoted
 // leaves of [sandbox.MaxFileBytes] for the line's own keys, with room to spare.
 const benchCollectTextBytes = sandbox.MaxFileBytes - sandbox.MaxFileBytes/64 - 64<<10
+
+// benchCollectErrBytes is a case's error stream: twice what a box reads whole,
+// so its read holds a redaction stream at its stages' windows, never the text.
+const benchCollectErrBytes = 2 * sandbox.MaxFileBytes
 
 // benchCollectText is n bytes of a report, numbered lines of words each ending
 // in sep, with one credential the redaction knows near its end.

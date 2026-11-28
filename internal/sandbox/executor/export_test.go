@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -22,7 +21,7 @@ func WriteHostProgram(t *testing.T, path, script string) {
 	writeHostProgram(t, path, []byte(script), 0o700)
 }
 
-// Bounded holds r's failure — the error stream it reads from the end, and the
+// Bounded holds r's failure — the end of the error stream it shows, and the
 // whole failure it composes — to failure bytes, and the lines of an event
 // stream it reads to line bytes, and returns r.
 //
@@ -35,9 +34,11 @@ func Bounded(r *Runner, failure, line int) *Runner {
 	return r
 }
 
-// Clocked has r bound a pack's release by now rather than the wall clock
+// Clocked has r bound a pack's release and its read of an error stream
+// ([sandbox.FailureReadWait]) by now rather than the wall clock
 // ([releaseContext]), and returns r: a case holds the release's deadline to the
-// one its rule gives exactly, however long its take ran.
+// one its rule gives exactly, however long its take ran, and a read past its
+// wait without waiting.
 func Clocked(r *Runner, now func() time.Time) *Runner {
 	r.now = now
 	return r
@@ -46,16 +47,11 @@ func Clocked(r *Runner, now func() time.Time) *Runner {
 // PackReleaseFloor is the least a pack's release is given.
 const PackReleaseFloor = packReleaseFloor
 
-// RedactContext is how much more than it keeps a read from the error stream's
-// end takes, never shown, so what decides how the end it keeps redacts is read
-// with it.
-const RedactContext = redact.LookBack
-
 // HumanSize is a byte count as the notes a run's failure writes say it.
 func HumanSize(n int64) string { return humanSize(n) }
 
-// UnreadNote is the line standing where the error stream's first unread bytes
-// were left out of what was shown.
+// UnreadNote is the line standing where the error stream's first bytes were
+// left out of what was shown.
 func UnreadNote(unread int64) string { return unreadNote(unread, false) }
 
 // MaxLineBytes is the line bound every runner New builds reads to.
@@ -413,7 +409,7 @@ func EachLine(r io.Reader, dec Decoder, bound int) error { return eachLine(r, de
 // CollectedCount is what [Runner.Collect] counts of stream, read whole through
 // its own reading of an event stream.
 func CollectedCount(r *Runner, stream []byte) (sandbox.RequestCount, error) {
-	read, _, err := r.decodeLines(bytes.NewReader(stream), false)
+	read, err := r.decodeLines(bytes.NewReader(stream), false, func() bool { return true })
 	return sandbox.RequestCount{Requests: read.requests, InFlight: read.inFlight, Undecided: read.undecided}, err
 }
 

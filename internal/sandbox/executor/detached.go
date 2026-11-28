@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"math"
 	"net/url"
@@ -456,8 +457,8 @@ type Pinned struct{ Name, Value string }
 type Runner struct {
 	harness Harness
 
-	// failureBound is how much of a run's error stream, from its end, a
-	// collection reads, and the most a composed failure may be:
+	// failureBound is how much of the end of a run's error stream's
+	// redaction a collection keeps, and the most a composed failure may be:
 	// [sandbox.MaxFailureBytes] in every runner [New] builds. The failure is
 	// what the coordinator condenses, so it is held to what one condensation
 	// takes beside the coordinator's prefix; from the end, because a process's
@@ -581,7 +582,12 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 		p.MCPConfig(), p.MCPConfigFresh(),
 		p.BrowserRelay(), p.BrowserRelayContinued(), p.BrowserRelayFresh(), p.BrowserRelayLog(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next",
-		p.CountRecord(), p.CountRecord() + ".next"}
+		p.CountRecord(), p.CountRecord() + ".next",
+		// THE ERROR STREAM TOO, and the event stream below, so each job
+		// writes them as new files: a `>` into the last job's would cut it
+		// under a read of it still under way, which then joins two jobs'
+		// bytes ([sandbox.ChangeOf]).
+		p.Err()}
 	dirs := []string{p.CommitAttribution(), p.SessionStaging(), p.ProgramStaging()}
 	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
 	// A home file a killed run left holding its settings, the bridge's token
@@ -607,9 +613,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 			dirs = append(dirs, a.artifactDirs(p)...)
 		}
 	}
-	// The stream too, where it lives apart from the result: it is only
-	// truncated when the next job starts, and a peek between the clear and
-	// the start would show the previous job's stream as this one's.
+	// The event stream, where it lives apart from the result (which is
+	// listed): a new file for the job, as the error stream is, and no peek
+	// between the clear and the start shows the last job's as this one's.
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
@@ -1145,8 +1151,8 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 }
 
 // Collect reads the finished job's result out of the box. The event stream is
-// decoded a line at a time ([eachLine]) and the error stream read from its end
-// ([Runner.failureBound]), so neither is refused for its size. A piece read
+// decoded a line at a time ([eachLine]) and the error stream redacted from its
+// start, its end kept ([Runner.readFailureTail]), so neither is refused for its size. A piece read
 // whole (report, question, result line, exit code) past [sandbox.MaxFileBytes],
 // or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
 // which a retry would read again), degrades only itself: described, the run
@@ -1165,6 +1171,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if openErr != nil {
 		return sandbox.Result{}, openErr
 	}
+	pieces.counting(ctx)
 	defer pieces.close()
 	release, holdErr := holdCollection(ctx, answers, pieces)
 	if holdErr != nil {
@@ -1185,8 +1192,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		inFlight  int
 		undecided int
 	)
+	var last streamLast
 	if out.Events {
-		streamed, refusal, err := r.decodeStream(pieces.stream, false)
+		streamed, refusal, err := r.decodeStream(ctx, pieces.stream, out.keepsLast())
 		if err != nil {
 			return sandbox.Result{}, err
 		}
@@ -1196,7 +1204,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result, spent, request = streamed.result, streamed.spent, streamed.request
 		window, limits, ended = streamed.window, streamed.limits, streamed.ended
 		requests, unheld, inFlight = streamed.requests, streamed.unheld, streamed.inFlight
-		undecided = streamed.undecided
+		undecided, last = streamed.undecided, streamed.last
 	}
 	// A HARNESS WHOSE OWN RECORD SHOWS ITS REQUESTS ([recordCollected]) is held to
 	// its cap by that record, read as its live count reads it; one counted off
@@ -1238,42 +1246,42 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		requests, undecided = n, 0
 	}
-	// THE STREAM BEFORE THE RESULT FILE, keeping not its last line: what its
-	// reading holds after is the record's halves, so the file is parsed beside
-	// nothing; the line is read again only where it stands for the file.
+	// THE STREAM BEFORE THE RESULT FILE, marking its last whole line where it
+	// may stand for the file ([Output.keepsLast]): that line, of the one read
+	// checked to be one version of the stream, is all that stands in for it.
 	if out.Result != "" {
 		raw, refusal, err := pieces.result.whole()
 		if err != nil {
 			return sandbox.Result{}, err
 		}
-		if out.lastLineStandsIn(refusal, raw) {
-			again, err := r.redecodeStream(ctx, box, pieces.stream)
-			if err != nil {
+		if out.lastLineStandsIn(refusal, raw) && last.said() {
+			// The result file holds the stream's last line, copied by the
+			// wrapper after the harness exits. Where the file is empty (the
+			// process group died) or refused, that line is read in its
+			// place, so a streamed session is not "no output" and its spend
+			// is charged; a refused file is still reported. Only where the
+			// stream said something, and only its last WHOLE line of the one
+			// read, read again from its open and checked to be the line that
+			// read decoded ([streamLast.resultLine]).
+			why := "was empty"
+			if refusal != "" {
+				refused = append(refused, refusal)
+				why = "was refused"
+			}
+			if raw, refusal, err = last.resultLine(pieces.stream); err != nil {
 				return sandbox.Result{}, err
 			}
-			if again.last.said() {
-				// The result file holds the stream's last line, copied by the
-				// wrapper after the harness exits. Where the file is empty (the
-				// process group died) or refused, that line is read in its
-				// place, so a streamed session is not "no output" and its spend
-				// is charged; a refused file is still reported. Only where the
-				// stream said something: a harness that exited at once leaves
-				// both empty.
-				why := "was empty"
-				if refusal != "" {
-					refused = append(refused, refusal)
-					why = "was refused"
-				}
-				raw, refusal = again.last.resultLine(out.Stdout)
-				log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
-					"detail", "the result file "+why+", so the event stream's last line, which the "+
-						"wrapper copies into it, was read in its place")
-			}
+			log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
+				"detail", "the result file "+why+", so the event stream's last line, which the "+
+					"wrapper copies into it, was read in its place")
 		}
 		if refusal != "" {
 			refused = append(refused, refusal)
 		} else {
 			parsed := r.harness.Parse(raw)
+			if unparsedRefused(parsed) {
+				pieces.result.withhold(sandbox.WithheldRefused, "")
+			}
 			if out.Events {
 				parsed.Transcript = result.Transcript
 				parsed.TranscriptElidedLines = result.TranscriptElidedLines
@@ -1343,31 +1351,20 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 
 	// The transcript is the observability surface of an agent with no
-	// telemetry: the parser's from streamed events, else the error stream,
-	// read once and reused below for the failure detail.
-	errTail, refusal, err := pieces.errTail()
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	if refusal != "" {
+	// telemetry: the parser's from streamed events, else the error stream's
+	// end, read only where it is shown, and once for the failure detail too.
+	if refusal := pieces.stderr.refusal; refusal != "" {
 		refused = append(refused, refusal)
 	}
-	shown, unread := streamEnd(errTail, r.failureBound)
-	stderr := strings.TrimSpace(shown)
-	// NOTHING OF ITS END SHOWN ([settledEnd]) but blank lines, the stream is
-	// said in the engine's own words, which the failure keeps whole.
-	continued := ""
-	if stderr == "" && unread > 0 {
-		continued = continuedNote(errTail.Size, shown != "")
-	}
-	switch {
-	case result.Transcript != "":
-	case stderr != "" && unread > 0:
-		result.Transcript = unreadNote(unread, false) + "\n" + stderr
-	case stderr != "":
-		result.Transcript = stderr
-	default:
-		result.Transcript = continued
+	stderrTail := sync.OnceValues(func() (failureTail, error) {
+		return r.readFailureTail(ctx, pieces.stderr, r.failureBound, handle.FailureReadBy)
+	})
+	if result.Transcript == "" {
+		tail, tailErr := stderrTail()
+		if tailErr != nil {
+			return sandbox.Result{}, tailErr
+		}
+		result.Transcript = tail.transcript()
 	}
 
 	codeText, refusal, err := pieces.exitCode.text()
@@ -1444,7 +1441,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// produced nothing at all, the exit status, the harness's error and the
 	// error stream.
 	var said []string
-	errStream := ""
+	errStream, unread := "", int64(0)
 	switch {
 	case findings != "":
 		// The report's refs before the message's, by one rule over both
@@ -1468,8 +1465,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
-		said = append(said, result.Error, continued)
-		errStream = stderr
+		tail, tailErr := stderrTail()
+		if tailErr != nil {
+			return sandbox.Result{}, tailErr
+		}
+		said = append(said, result.Error, tail.note())
+		errStream, unread = strings.TrimSpace(tail.shown), tail.before
 	default:
 		said = append(said, result.Error)
 	}
@@ -1777,66 +1778,74 @@ func unreadNote(unread int64, none bool) string {
 		return fmt.Sprintf("(the error stream, %s, is not shown: the engine's own account of the "+
 			"run fills what one condensation can take)", humanSize(unread))
 	}
-	return fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read from "+
-		"its end, as much of it as one condensation can take beside the engine's own account)",
+	return fmt.Sprintf("(the error stream's first %s are not shown: a run's failure shows the end of "+
+		"its redaction, as much of it as one condensation can take beside the engine's own account)",
 		humanSize(unread))
 }
 
-// continuedNote is what stands for an error stream of size bytes of whose end
-// nothing is shown: the end, as read, continues what was written before the
-// read, or every line it opens is blank.
-func continuedNote(size int64, blank bool) string {
-	why := "continues what was written before it"
-	if blank {
-		why = "opens only blank lines"
-	}
-	return fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s)",
-		humanSize(size), why)
-}
-
 // decodeStream reads the event stream a collection opened through a fresh
-// decoder, no further than the size it was weighed at, and keeps its last line
-// where keepLast asks, which [Runner.Collect] reads again for where the line
-// stands for the result file — or answers the refusal of a stream the box
-// would not open because it is not a regular file ([notRegularPiece]).
-func (r *Runner) decodeStream(stream *piece, keepLast bool) (decodedStream, string, error) {
+// decoder under ctx, whose end fails it, no further than the size it was
+// weighed at ([readStream]), and
+// marks its last line where keepLast asks, which [Runner.Collect] reads again
+// from the same open where the line stands for the result file. A stream still being written
+// ends its transcript where its redaction settled; one cut or written over
+// while read is refused, as one the box would not open because it is not a
+// regular file ([notRegularPiece]) is.
+func (r *Runner) decodeStream(ctx context.Context, stream *piece, keepLast bool) (decodedStream, string, error) {
 	if stream.refusal != "" {
 		return decodedStream{request: contextRead{why: "the run's event stream was not read: " +
 			stream.refusal}}, stream.refusal, nil
 	}
-	defer stream.close()
-	return r.decodeLines(io.LimitReader(stream.body, stream.size), keepLast)
+	if !keepLast {
+		// Kept open where its last line may be read again ([streamLast]),
+		// to the collection's own close.
+		defer stream.close()
+	}
+	read := readStream(ctx, stream)
+	decoded, err := r.decodeLines(read, keepLast, read.whole)
+	switch {
+	case err != nil:
+		return decodedStream{}, "", err
+	case read.change == sandbox.FileChanged:
+		refusal := stream.withhold(sandbox.WithheldChanged, changedPiece(stream.path, stream.what, read.read,
+			stream.size))
+		return decodedStream{request: contextRead{why: "the run's event stream was not read: " + refusal}},
+			refusal, nil
+	case !read.whole():
+		decoded.result.Transcript = strings.TrimSpace(unendedNote() + "\n" + decoded.result.Transcript)
+		if !decoded.ended {
+			// ITS ANSWER AND ERROR MAY STILL GROW: a decoder joins them
+			// across events (OpenCode's chunks of one message), so a later
+			// event could join them and redact them otherwise. Withheld, not
+			// shown as it stands; a stream that said how its run ended closed
+			// them with that account ([Decoder.Ended]).
+			decoded.result.Text, decoded.result.Error = "", unendedError
+		}
+	}
+	return decoded, "", nil
 }
 
-// redecodeStream reads the stream a collection opened again, keeping its last
-// line: opened anew, and read no further than the size the first open was
-// weighed at, so a file renamed over it since adds nothing to what is held.
-func (r *Runner) redecodeStream(ctx context.Context, box sandbox.Sandbox, stream *piece) (decodedStream, error) {
-	if stream.refusal != "" || stream.size == 0 {
-		return decodedStream{}, nil
-	}
-	body, _, err := box.OpenRange(ctx, stream.path, 0, stream.size)
-	if err != nil {
-		return decodedStream{}, fmt.Errorf("executor: opening the event stream again: %w", err)
-	}
-	defer func() { _ = body.Close() }()
-	again, _, err := r.decodeLines(io.LimitReader(body, stream.size), true)
-	return again, err
-}
+// unendedError is the failure of a run whose event stream was still being
+// written, and had not said how the run ended, when its collection read it.
+const unendedError = "the run's event stream was still being written when the collection read it, and had " +
+	"not said how the run ended, so what it said so far is not shown"
 
 // decodeLines decodes an event stream's lines from stream through a fresh
-// decoder.
-func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, string, error) {
+// decoder, its unended last line a line only where whole says the stream
+// ended; where it did not, its transcript ends where its redaction settled.
+func (r *Runner) decodeLines(stream io.Reader, keepLast bool, whole func() bool) (decodedStream, error) {
 	events := r.harness.Events()
-	kept := &keepingLast{Decoder: events}
-	dec := events
+	var last *streamLast
 	if keepLast {
-		dec = kept
+		last = &streamLast{seed: maphash.MakeSeed()}
 	}
-	if err := eachLine(stream, dec, r.lineBound); err != nil {
-		return decodedStream{}, "", fmt.Errorf("executor: reading the event stream: %w", err)
+	if err := eachLineOf(stream, events, r.lineBound, whole, last); err != nil {
+		return decodedStream{}, fmt.Errorf("executor: reading the event stream: %w", err)
 	}
-	out := decodedStream{result: events.Result(), last: kept.last, ended: events.Ended(),
+	if unended, ok := events.(streamUnended); ok && !whole() {
+		unended.streamUnended()
+	}
+	out := decodedStream{result: events.Result(), ended: events.Ended(),
 		requests: events.Requests(), inFlight: events.InFlight(), undecided: events.Undecided()}
 	if spender, ok := events.(runSpender); ok {
 		if spent, stated := spender.runSpend(); stated {
@@ -1855,7 +1864,10 @@ func (r *Runner) decodeLines(stream io.Reader, keepLast bool) (decodedStream, st
 	if reporter, ok := events.(enforcerReporter); ok {
 		out.unheld = reporter.unheld()
 	}
-	return out, "", nil
+	if last != nil {
+		out.last = *last
+	}
+	return out, nil
 }
 
 // decodedStream is what a run's event stream said: the result as its decoder
@@ -1884,58 +1896,91 @@ type decodedStream struct {
 	inFlight, undecided int
 }
 
-// streamLast is an event stream's last line, as `tail -n 1` would copy it
-// into a result file: the line itself, or the size of one too long to read
-// and the bound it was past.
+// streamLast is where an event stream's last line, as `tail -n 1` would copy
+// it into a result file, stood in the collection's one read of the stream: its
+// offset and length and a keyed hash of its bytes, or the size of one too long
+// to read and the bound it was past. The line itself is not held: a stand-in
+// reads it again from the same open ([streamLast.resultLine]).
 type streamLast struct {
-	line    []byte
+	off, n  int64
+	sum     uint64
+	seed    maphash.Seed
 	skipped int64
 	bound   int
 }
 
+// mark makes line, from off in the stream, the last line.
+func (l *streamLast) mark(off int64, line []byte) {
+	l.off, l.n, l.sum, l.skipped = off, int64(len(line)), maphash.Bytes(l.seed, line), 0
+}
+
+// skip makes a line of n bytes past bound the last line.
+func (l *streamLast) skip(n int64, bound int) { l.n, l.skipped, l.bound = 0, n, bound }
+
 // said reports whether the stream ended on anything at all: a line, or one
 // too long to read.
-func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
+func (l streamLast) said() bool { return l.n > 0 || l.skipped > 0 }
+
+// keepsLast reports whether a collection marks the event stream's last whole
+// line as it decodes it, for where it stands in for the result file
+// ([Output.lastLineStandsIn]): a result file of its own beside a stream the
+// wrapper copied the line from. Read again from the same open, at most a
+// line's bound, and counted in the collection's weight
+// ([collectionPieces.weight]), never by path, which could read another job's
+// file.
+func (o Output) keepsLast() bool { return o.Events && o.Result != "" && o.Result != o.Stdout }
 
 // lastLineStandsIn reports whether the stream's last line is read in place of
 // the result file ([Runner.Collect]): the file, read as raw or refused, is
 // empty or refused, and is a file of its own beside a stream the wrapper copied
 // the line from.
 func (o Output) lastLineStandsIn(refusal string, raw []byte) bool {
-	return o.Events && o.Result != "" && o.Result != o.Stdout && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
+	return o.keepsLast() && (refusal != "" || len(bytes.TrimSpace(raw)) == 0)
 }
 
-// resultLine is the stream's last line read in place of the result file: the
-// line, or a refusal where it was past what one line of a stream may hold — as
-// the copy itself would have been past what a result file is read to.
-func (l streamLast) resultLine(stream string) ([]byte, string) {
+// resultLine is the stream's last line read in place of the result file, again
+// from stream's open ([sandbox.ReadAgain]): the line, or a refusal where it was
+// past what one line of a stream may hold, as the copy itself would have been
+// past what a result file is read to, or where it is not the line the one read
+// decoded. It is only that line where its bytes hash as they did and the file
+// is the version the read read, or that version appended to: an open that
+// cannot read again stands nothing in.
+func (l streamLast) resultLine(stream *piece) ([]byte, string, error) {
 	if l.skipped > 0 {
 		return nil, fmt.Sprintf("the result its harness printed (the last line of %s, read in place of "+
 			"the result file) is %s, past the %s one line of a run's output may hold, "+
-			"so it was not read", stream, humanSize(l.skipped), humanSize(int64(l.bound)))
+			"so it was not read", stream.path, humanSize(l.skipped), humanSize(int64(l.bound))), nil
 	}
-	return l.line, ""
-}
-
-// keepingLast is a decoder that also keeps the stream's last non-blank line,
-// in one buffer it reuses, so what it holds is one line however long the
-// stream.
-type keepingLast struct {
-	Decoder
-	last streamLast
-}
-
-func (k *keepingLast) Line(line []byte) {
-	if len(bytes.TrimSpace(line)) > 0 {
-		k.last.line = append(k.last.line[:0], line...)
-		k.last.skipped = 0
+	line := make([]byte, l.n)
+	n, err := sandbox.ReadAgain(stream.body, line, l.off)
+	switch {
+	case errors.Is(err, sandbox.ErrCannotReadAgain):
+		return nil, stream.withhold(sandbox.WithheldChanged, fmt.Sprintf("the last line of %s, read in "+
+			"place of the result file, could not be read again from the collection's read of it, so it "+
+			"was not read", stream.path)), nil
+	case int64(n) < l.n:
+		// Short of what the one read read: the file was cut since.
+		return nil, stream.withhold(sandbox.WithheldChanged, lineChanged(stream.path)), nil
+	case err != nil && !errors.Is(err, io.EOF):
+		return nil, "", fmt.Errorf("executor: reading the event stream's last line again: %w", err)
 	}
-	k.Decoder.Line(line)
+	change, err := sandbox.ChangeOf(stream.body)
+	if err != nil {
+		return nil, "", fmt.Errorf("executor: telling whether the event stream changed since it was read: %w", err)
+	}
+	// AN APPEND IS NO CHANGE TO THE LINE only where its bytes are the ones
+	// read: a stream grown past its open tells nothing of a write within it.
+	if change == sandbox.FileChanged || maphash.Bytes(l.seed, line) != l.sum {
+		return nil, stream.withhold(sandbox.WithheldChanged, lineChanged(stream.path)), nil
+	}
+	return line, "", nil
 }
 
-func (k *keepingLast) Skipped(line LongLine) {
-	k.last.line, k.last.skipped, k.last.bound = k.last.line[:0], line.Size, line.Bound
-	k.Decoder.Skipped(line)
+// lineChanged describes an event stream's last line that is no longer the one
+// its collection's read decoded when read again in place of the result file.
+func lineChanged(path string) string {
+	return fmt.Sprintf("the last line of %s, read again in place of the result file, was not the line "+
+		"the collection had read (the stream was cut or written over since), so it was not read", path)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past

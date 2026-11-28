@@ -212,6 +212,7 @@ func recordReceipts(ctx context.Context, h recordConfirmer, box sandbox.Sandbox,
 		ids = append(ids, take.Take)
 	}
 	held, err := h.notesHeld(ctx, box, Session{ID: ask.Session}, takes, summary)
+	countRecordChanged(ctx, err)
 	if err != nil {
 		return sandbox.TakeReceipts{Why: "the session record could not be read: " + err.Error()}
 	}
