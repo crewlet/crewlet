@@ -14,6 +14,8 @@ import type { DelegatedDecisionsAnswer } from "~/contract/delegated.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { typeSetting } from "~/test/settingField.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { toastText } from "~/testing.tsx";
+import { APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import {
   engineAnswer,
   mountSettings,
@@ -163,7 +165,10 @@ test("the switch turns delegation off as a patch that removes the key", async ()
     delegated_decisions: { enabled: null },
     _summary: "Delegated decisions: turned off",
   });
-  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+  // CONFIRMED BY ITS TOAST, never a line beside the switch.
+  expect(toastText()).toContain("Delegated decisions: turned off");
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(screen.queryByText(/Saved, applying/)).toBeNull();
 });
 
 // FILLED FROM THE DOCUMENT, and the WHOLE list written back: a merge patch
@@ -194,9 +199,11 @@ test("a rule's sheet is filled from the document and its save writes the whole l
     delegated_decisions: { rules: [SSH, { ...RELEASE, sample_one_in: 3 }] },
     _summary: "Delegated decisions: change rule 2 (Merges and Deploys)",
   });
-  // A SAVE CLOSES THE SHEET; the card says the change is applying.
+  // A SAVE CLOSES THE SHEET; its toast says the change is applying.
   expect(screen.queryByRole("dialog", { name: "Edit rule 2" })).toBeNull();
-  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+  expect(toastText()).toContain("Delegated decisions: change rule 2 (Merges and Deploys)");
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(screen.queryByText(/Saved, applying/)).toBeNull();
 });
 
 test("the engine's refusal of a rule is said in the sheet, and nothing is saved", async () => {
@@ -312,7 +319,7 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
       "Delegated decisions: An agent must answer within set to 20 minutes " +
       "(delegated_decisions.deadline_seconds)",
   });
-  // THE SAVED VALUE, MARKED AS APPLYING, in the row it was changed in.
+  // THE SAVED VALUE, in the row it was changed in; its toast says it is applying.
   const row = within(screen.getByRole("table", { name: "What Crewlet enforces" })).getByRole(
     "row",
     {
@@ -320,7 +327,8 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
     },
   );
   expect(within(row).getByText("20 minutes")).toBeTruthy();
-  expect(within(row).getByText("applying…")).toBeTruthy();
+  expect(within(row).queryByText(/applying/)).toBeNull();
+  expect(toastText()).toContain(APPLYING_SENTENCE);
 });
 
 // THE ENGINE'S RANGE, said beside the field before anything is sent: no cap

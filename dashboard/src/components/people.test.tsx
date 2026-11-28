@@ -19,6 +19,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useState } from "react";
+import { ToastProvider } from "@crewlethq/ui";
 import {
   AccessPicker,
   AccessTags,
@@ -46,6 +47,8 @@ import type { OrgServices } from "~/contract/services.ts";
 import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { toastText } from "~/testing.tsx";
+import { IAM_PENDING } from "~/lib/iamWrite.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -147,9 +150,11 @@ function mount(node: React.ReactNode) {
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <ViewerProvider>
-        <Router>{node}</Router>
-      </ViewerProvider>
+      <ToastProvider>
+        <ViewerProvider>
+          <Router>{node}</Router>
+        </ViewerProvider>
+      </ToastProvider>
     </ClientContext.Provider>,
   );
 }
@@ -705,7 +710,8 @@ describe("a person created on a seat", () => {
   });
 
   // RECORDED AND NOT YET APPLIED HERE (202) is still a create the engine
-  // answered with its link, which is shown — it is the only time it is.
+  // answered with its link, which is shown: it is the only time it is. That
+  // it is recorded is its toast's to say, never a line under the link.
   test("a create recorded but not yet applied here still shows its link", async () => {
     engine({ "POST /iam/people": [json(202, { ...CREATED, outcome: "pending" })] });
     const dialog = create();
@@ -714,11 +720,8 @@ describe("a person created on a seat", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add person" }));
     await settle();
-    expect(
-      within(dialog)
-        .getAllByRole("status")
-        .some((s) => /^Saved\. The list will update in a moment\./.test(s.textContent ?? "")),
-    ).toBe(true);
+    expect(toastText()).toContain(IAM_PENDING);
+    expect(within(dialog).queryByText(IAM_PENDING)).toBeNull();
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
     ).toBeTruthy();

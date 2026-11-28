@@ -8997,11 +8997,11 @@ ul.md-tasks > li > input[type="checkbox"] {
 .ceiling-value.muted {
   color: var(--color-text-tertiary);
 }
-.ceiling-applying {
+.ceiling-refused {
   margin-left: var(--spacing-1);
   color: var(--color-text-tertiary);
 }
-/* A setting's value in its row, and the word that says a save is applying. */
+/* A setting's value in its row, and the word that says this node refused a save. */
 .setting-value {
   display: inline-flex;
   flex-wrap: wrap;
@@ -9009,7 +9009,7 @@ ul.md-tasks > li > input[type="checkbox"] {
   column-gap: var(--spacing-2);
   min-width: 0;
 }
-.setting-value-applying {
+.setting-value-refused {
   font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }

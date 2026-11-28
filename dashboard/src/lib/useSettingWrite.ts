@@ -20,6 +20,9 @@
  *     the epoch it activated at; `standing` follows where this node stands on
  *     it (`lib/nodeStanding.ts`), and the caller re-reads what it draws once
  *     the node applied it or a later activation passed it.
+ *
+ * The save is confirmed here, with the toast every write raises
+ * (`lib/savedToast.ts`); a screen draws only what the person must act on.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,6 +34,7 @@ import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/t
 import { configRefusalWords, type RefusalWords } from "./configRefusal.ts";
 import { nodeStanding, type Standing } from "./nodeStanding.ts";
 import { useLastHealth } from "./useLastHealth.ts";
+import { useSavedToast, type SavedWords } from "./savedToast.ts";
 
 /** One change to the document: the merge patch that makes it, and its audit summary. */
 export interface SettingChange {
@@ -91,6 +95,7 @@ export function useSettingWrite({
   reread,
   onApplied,
   problemWords,
+  said,
 }: {
   /** How a conflict ends, in the page's words: "Reload to see the limits as they are now." */
   reread: string;
@@ -102,6 +107,8 @@ export function useSettingWrite({
    * page knows which setting a problem is about, and what it is called.
    */
   problemWords?: (problems: readonly ConfigProblem[]) => string;
+  /** The save's toast in the page's words; the revision's summary otherwise. */
+  said?: SavedWords;
 }): SettingWrite {
   const [state, setState] = useState<SettingWriteState>({ kind: "idle" });
   const prepared = useRef<Prepared | null>(null);
@@ -265,6 +272,7 @@ export function useSettingWrite({
     setState({ ...state, standing });
     if (standing === "applied" || standing === "passed") appliedRef.current?.();
   }, [state, standing]);
+  useSavedToast(state.kind === "saved" ? state : null, said);
 
   const busy = state.kind === "checking" || state.kind === "saving";
   return { state, submit, confirm, reset, busy };

@@ -76,7 +76,7 @@ import { handlesOf, matchesPerson, seatLine, useChatPeople, type ChatPerson } fr
 import { useRoomDetail } from "./roomDetail.ts";
 import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
-import { StartNote } from "./StartNote.tsx";
+import { StartNote, useSayPending } from "./StartNote.tsx";
 import { ROOM_TEMPLATES, templateNamed, type RoomTemplate } from "./templates.ts";
 import { ArchiveDialog, EraseDialog, PruneDialog, RetentionDialog } from "./RoomAdmin.tsx";
 
@@ -261,6 +261,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const [members, setMembers] = useState<string[]>([]);
   const [following, setFollowing] = useState<RoomFollowing>("named");
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
 
   const name = normalizeName(typed);
   const refusal = nameRefusal(typed);
@@ -296,7 +297,9 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
       toast.show({ variant: "success", message: `${roomWhere(kind, name)} is ready` });
       return;
     }
-    setReport(answer);
+    const left = say(answer);
+    if (left) setReport(left);
+    else onClose();
   }
 
   return (

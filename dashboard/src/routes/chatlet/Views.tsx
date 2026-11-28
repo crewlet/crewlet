@@ -96,7 +96,7 @@ import { useRoomDetail } from "./roomDetail.ts";
 import { isConversationWith, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
-import { StartNote } from "./StartNote.tsx";
+import { StartNote, useSayPending } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";
 import { ViewHead } from "./ViewHead.tsx";
 import { ago } from "~/lib/ago.ts";
@@ -1122,6 +1122,7 @@ export function NewMessageView() {
   const [body, setBody] = useState("");
   const dictation = useDictation();
   const [report, setReport] = useState<ReturnType<typeof reportFor> | null>(null);
+  const say = useSayPending();
   const field = useRef<HTMLInputElement>(null);
 
   const others = people.everyone.filter(
@@ -1177,7 +1178,7 @@ export function NewMessageView() {
       if (result === null) return;
       const answer = reportFor("direct", result);
       if (!answer.go) {
-        setReport(answer);
+        setReport(say(answer));
         return;
       }
       room = answer.go;

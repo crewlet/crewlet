@@ -83,7 +83,7 @@ import { ReadFailed, ReadPending } from "./ReadState.tsx";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
-import { StartNote } from "./StartNote.tsx";
+import { StartNote, useSayPending } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
 
 const NO_PARTICIPANTS: readonly string[] = [];
@@ -475,6 +475,7 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
   const star = useRoomStar(channelID);
   const join = useAct("join_channel");
   const [report, setReport] = useState<StartReport | null>(null);
+  const say = useSayPending();
   const channel = scope.channel;
   const standing = open?.detail.data
     ? {
@@ -487,14 +488,13 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
   const onJoin = async () => {
     if (!pressable(join)) return;
     setReport(null);
-    // QUIET: what the press came to is the room's own note (`start.ts`),
-    // rather than a toast saying "joined" over a room this node has not
-    // applied the join to yet. A join that landed is confirmed by the room,
-    // read again at the join's floor: the bar goes and the composer stays.
+    // QUIET: a join that landed is confirmed by the room, read again at the
+    // join's floor: the bar goes and the composer stays. A pending one is its
+    // toast, and anything else the room's own note (`start.ts`).
     const result = await join.run({ channel: channelID }, { done: "Joined the room", quiet: true });
     if (result === null) return;
     const answer = reportFor("join", result);
-    if (answer.tone !== "success") setReport(answer);
+    if (answer.tone !== "success") setReport(say(answer));
   };
 
   let words: ReactNode;

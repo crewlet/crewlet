@@ -29,6 +29,9 @@
  * "applying" for the life of the page while the gate went on enforcing the
  * ceiling before. A save a later activation passed before this node applied
  * it is re-read like an apply: there is nothing more to wait for.
+ *
+ * The save is confirmed here, with the toast every write raises
+ * (`lib/savedToast.ts`).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -57,6 +60,7 @@ import {
 } from "./ceilings.ts";
 import { nodeStanding, type Standing } from "./nodeStanding.ts";
 import { useLastHealth } from "./useLastHealth.ts";
+import { useSavedToast } from "./savedToast.ts";
 
 /** What the last change came to. */
 export type CeilingWriteState =
@@ -297,6 +301,7 @@ export function useCeilingWrite(
     setState({ ...state, standing });
     if (standing === "applied" || standing === "passed") appliedRef.current?.();
   }, [state, standing]);
+  useSavedToast(state.kind === "saved" ? state : null);
 
   const busy = state.kind === "checking" || state.kind === "saving";
   return { state, submit, confirm, reset, busy };

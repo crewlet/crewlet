@@ -69,7 +69,7 @@ import {
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
-import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { saysSomething, SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import {
   DELEGABLE_KINDS,
   enabledPlan,
@@ -353,8 +353,7 @@ function RulesCard({
   });
   const [gesture, setGesture] = useState<RulesGesture>({ kind: "none" });
   const saved = write.state.kind === "saved" ? write.state : null;
-  // A SAVE CLOSES THE SHEET OR THE QUESTION: the mark beside the card's state
-  // says the change is applying, which is the answer the person waits for.
+  // A SAVE CLOSES THE SHEET OR THE QUESTION: its toast says it is applying.
   useEffect(() => {
     if (saved && (gesture.kind === "sheet" || gesture.kind === "remove")) {
       setGesture({ kind: "none" });
@@ -364,10 +363,6 @@ function RulesCard({
     write.reset();
     setGesture(next);
   };
-  const mark =
-    saved && (saved.standing === "applying" || saved.standing === "refused")
-      ? `Saved, ${standingWords(saved.standing)}`
-      : "";
   const held = access.can ? undefined : access.reason;
   // A kind is in one rule only, so with every kind taken there is nothing to add.
   const full = DELEGABLE_KINDS.every((k) => answer.rules.some((r) => r.kinds.includes(k)));
@@ -383,24 +378,17 @@ function RulesCard({
             : "Off. Every request goes to people, and the rules are kept."
         }
         actions={
-          <span className="row gap-2">
-            {mark && (
-              <span className="t-caption" role="status">
-                {mark}
-              </span>
-            )}
-            <Switch
-              size="sm"
-              label={answer.enabled ? "On" : "Off"}
-              checked={answer.enabled}
-              disabledReason={access.can ? (write.busy ? "Saving…" : undefined) : access.reason}
-              title={access.can ? undefined : access.reason}
-              onCheckedChange={(on) => {
-                begin({ kind: "switch" });
-                write.submit(enabledPlan(on));
-              }}
-            />
-          </span>
+          <Switch
+            size="sm"
+            label={answer.enabled ? "On" : "Off"}
+            checked={answer.enabled}
+            disabledReason={access.can ? (write.busy ? "Saving…" : undefined) : access.reason}
+            title={access.can ? undefined : access.reason}
+            onCheckedChange={(on) => {
+              begin({ kind: "switch" });
+              write.submit(enabledPlan(on));
+            }}
+          />
         }
       >
         <Card.Title id="delegated-rules">Rules</Card.Title>
@@ -417,7 +405,7 @@ function RulesCard({
           Add rule
         </Button>
       </PageActions>
-      {gesture.kind === "switch" && write.state.kind !== "idle" && !saved && (
+      {saysSomething(write.state) && (gesture.kind === "switch" || saved) && (
         <div className="delegated-rules-status">
           <SettingWriteStatus write={write} unchanged="Already so." onReload={onApplied} />
         </div>

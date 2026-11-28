@@ -57,6 +57,7 @@ import {
   TableKeyCell,
   TableTagsCell,
   Tag,
+  useToast,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { NetworkGlyph } from "@crewlethq/icons/glyphs";
@@ -404,6 +405,17 @@ async function remove(node: string, peer: string, force: boolean): Promise<Heard
   }
 }
 
+/** What a removal that landed is confirmed by: who left, through whom, and who counts now. */
+export function removedWords(answer: BrokerRemoved): { title: string; message: string } {
+  const group = answer.group
+    ? ` The group counts ${answer.group.peers.map((p) => voterLabel(p.name, p.peer)).join(", ")}.`
+    : "";
+  return {
+    title: `${voterLabel(answer.node, answer.peer)} is no longer a voter`,
+    message: `Removed through ${answer.by}'s system account.${group}`,
+  };
+}
+
 /**
  * Removing a voter from the metadata group, named by its node id or — for one
  * nobody can name — by its peer id, which is then what is typed.
@@ -429,7 +441,8 @@ export function BrokerRemoveDialog({
   const [typed, setTyped] = useState("");
   const [forcing, setForcing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [heard, setHeard] = useState<Heard | null>(null);
+  const [heard, setHeard] = useState<Exclude<Heard, { kind: "removed" }> | null>(null);
+  const toast = useToast();
   const id = node || peer;
   // A RUNNING MEMBER IS REFUSED UNLESS FORCED, so forcing is an acknowledgement the remove waits on.
   const force: ConsequenceItem[] = live
@@ -449,15 +462,19 @@ export function BrokerRemoveDialog({
       ]
     : [];
   const confirmed = typed.trim() === id && consequencesAnswered(force);
-  const done = heard?.kind === "removed";
 
   async function send() {
     if (busy || !confirmed) return;
     setBusy(true);
     const next = await remove(node, peer, live && forcing);
-    setHeard(next);
     setBusy(false);
     onDone();
+    if (next.kind === "removed") {
+      toast.show({ variant: "success", ...removedWords(next.answer) });
+      onClose();
+      return;
+    }
+    setHeard(next);
   }
 
   return (
@@ -474,55 +491,32 @@ export function BrokerRemoveDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            {done ? "Close" : "Cancel"}
+            Cancel
           </Button>
-          {!done && (
-            <Button variant="danger" onClick={() => void send()} disabled={busy || !confirmed}>
-              {busy ? "Waiting for the commit" : heard ? "Send again" : "Remove"}
-            </Button>
-          )}
+          <Button variant="danger" onClick={() => void send()} disabled={busy || !confirmed}>
+            {busy ? "Waiting for the commit" : heard ? "Send again" : "Remove"}
+          </Button>
         </>
       }
     >
-      {!done && (
-        <>
-          <p className="t-body secondary" style={{ margin: 0 }}>
-            <InlineCode>{voterLabel(node, peer)}</InlineCode> stops counting in elections. Use this
-            for a member that is gone for good.
-          </p>
-          <label className="col" style={{ gap: 6 }}>
-            <span className="t-caption">
-              Type <InlineCode>{id}</InlineCode> to confirm
-            </span>
-            <Input
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              autoFocus
-              spellCheck={false}
-              disabled={busy}
-              aria-label={`Type ${id} to confirm`}
-            />
-          </label>
-          {live && <ConsequenceList divided items={force} />}
-        </>
-      )}
-      {heard?.kind === "removed" && (
-        <Callout variant="success" role="status">
-          <span className="col" style={{ gap: 6 }}>
-            <span>
-              <InlineCode>{voterLabel(heard.answer.node, heard.answer.peer)}</InlineCode> is no
-              longer a voter, removed through <InlineCode>{heard.answer.by}</InlineCode>&apos;s
-              system account.
-            </span>
-            {heard.answer.group && (
-              <span className="t-caption">
-                The group counts{" "}
-                {heard.answer.group.peers.map((p) => voterLabel(p.name, p.peer)).join(", ")}.
-              </span>
-            )}
-          </span>
-        </Callout>
-      )}
+      <p className="t-body secondary" style={{ margin: 0 }}>
+        <InlineCode>{voterLabel(node, peer)}</InlineCode> stops counting in elections. Use this for
+        a member that is gone for good.
+      </p>
+      <label className="col" style={{ gap: 6 }}>
+        <span className="t-caption">
+          Type <InlineCode>{id}</InlineCode> to confirm
+        </span>
+        <Input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          autoFocus
+          spellCheck={false}
+          disabled={busy}
+          aria-label={`Type ${id} to confirm`}
+        />
+      </label>
+      {live && <ConsequenceList divided items={force} />}
       {heard?.kind === "refused" && (
         <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 6 }}>

@@ -1,7 +1,8 @@
 /**
  * What a change to a setting came to, under the field that made it: checking,
- * what the change would introduce, why it was refused, each with the one
- * control that answers it (`lib/useSettingWrite.ts`).
+ * what the change would introduce, why it was refused, and a save this node
+ * refused, each with the one control that answers it (`lib/useSettingWrite.ts`).
+ * A save itself is confirmed by its toast (`lib/savedToast.ts`), not here.
  *
  * A LIVE REGION, because each of these arrives after the press with nothing
  * else on screen moving: a reader who pressed Save and heard nothing would
@@ -56,6 +57,11 @@ export function SettingWriteStatus({
           }
         />
       )}
+      {state.kind === "saved" && state.standing === "refused" && (
+        <Callout variant="danger" title="Saved, but this node refused it">
+          It goes on running the setting before.
+        </Callout>
+      )}
       {state.kind === "refused" && (
         <Callout
           variant="danger"
@@ -75,16 +81,10 @@ export function SettingWriteStatus({
   );
 }
 
-/** How a saved change stands on this node, as the quiet word beside its value. */
-export function standingWords(standing: "applying" | "applied" | "refused" | "passed"): string {
-  switch (standing) {
-    case "applied":
-      return "applied";
-    case "refused":
-      return "refused by this node";
-    case "passed":
-      return "";
-    case "applying":
-      return "applying…";
-  }
+/** Whether [SettingWriteStatus] draws anything for `state`, for a caller that frames it. */
+export function saysSomething(state: SettingWrite["state"]): boolean {
+  return state.kind !== "idle" && (state.kind !== "saved" || state.standing === "refused");
 }
+
+/** A saved value this node refused, as the word beside the value it goes on running. */
+export const REFUSED_HERE = "refused by this node";

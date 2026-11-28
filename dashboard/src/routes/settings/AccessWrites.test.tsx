@@ -32,7 +32,8 @@ import { LiveSocket, setStepUpConfirmer, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
-import { pick } from "~/testing.tsx";
+import { pick, toastText } from "~/testing.tsx";
+import { IAM_PENDING } from "~/lib/iamWrite.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
@@ -496,14 +497,12 @@ test("a stale refusal leaves the cancel dialog only a way out", async () => {
   expect(eng.writes()).toHaveLength(1);
 });
 
-// A GESTURE RECORDED AND NOT YET APPLIED HERE (202) IS DONE, AND THE DIALOG
-// OFFERS ONLY A WAY OUT. It kept "Keep it", which read as undoing a
-// cancellation already durable, beside an enabled "Cancel invitation" that sent
-// a second DELETE under a new key; and the edit kept Save, which sent the same
-// change again. The CONTROL is the outcome, which says it is recorded.
-// Mutation: draw the confirm or Save on a pending answer and it is offered
-// again.
-test("a write recorded but not yet applied here leaves its dialog only Done", async () => {
+// RECORDED AND NOT YET APPLIED HERE (202) IS SAID BY ITS TOAST, as every
+// write's pending answer is, and the dialog closes: nothing is left in it to
+// press, so neither a second DELETE nor the same change again can be sent.
+// Mutation: keep the dialog open on a pending answer, or draw the sentence
+// in it, and this fails.
+test("a write recorded but not yet applied here is said by its toast, and its dialog closes", async () => {
   const eng = engine({
     "DELETE /iam/invitations/inv-1": [json(202, { outcome: "pending", op_id: "k" })],
     "PATCH /iam/people/p-bo": [json(202, { id: "p-bo", outcome: "pending", op_id: "k" })],
@@ -514,12 +513,7 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
   const cancel = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
   fireEvent.click(within(cancel).getByRole("button", { name: "Cancel invitation" }));
   await settle();
-  expect(within(cancel).getByRole("status").textContent).toMatch(
-    /^Saved\. The list will update in a moment\./,
-  );
-  expect(within(cancel).queryByRole("button", { name: "Cancel invitation" })).toBeNull();
-  expect(within(cancel).queryByRole("button", { name: "Keep it" })).toBeNull();
-  fireEvent.click(within(cancel).getByRole("button", { name: "Done" }));
+  expect(toastText()).toContain(IAM_PENDING);
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
 
   location.hash = "#/settings/people?peek=person:p-bo";
@@ -528,10 +522,7 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
   fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(within(edit).getByRole("status").textContent).toMatch(
-    /^Saved\. The list will update in a moment\./,
-  );
-  expect(within(edit).queryByRole("button", { name: "Save" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Edit Bo Lang" })).toBeNull();
   expect(eng.writes()).toHaveLength(2);
 });
 

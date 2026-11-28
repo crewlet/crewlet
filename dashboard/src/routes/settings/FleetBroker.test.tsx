@@ -11,7 +11,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { BrokerMembership, brokerRows, groupSummary, voterState } from "./FleetBroker.tsx";
+import { ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
+import { toastText } from "~/testing.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
 import type { FleetBrokerAnswer } from "~/protocol/index.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -59,9 +61,11 @@ function engine(reply: { status: number; body: unknown }): URL[] {
 function panel(a?: FleetBrokerAnswer, error?: string, onChanged?: () => void) {
   // IN A ROUTER, because a live node's name links to its own fleet page.
   return render(
-    <Router>
-      <BrokerMembership answer={a} error={error} onChanged={onChanged} />
-    </Router>,
+    <ToastProvider>
+      <Router>
+        <BrokerMembership answer={a} error={error} onChanged={onChanged} />
+      </Router>
+    </ToastProvider>,
   );
 }
 
@@ -190,7 +194,10 @@ describe("broker membership", () => {
       target: { value: gone },
     });
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(screen.getByText(/is no\s+longer a voter/)).toBeTruthy());
+    // SAID BY ITS TOAST, and the dialog closes: no line is left inside it.
+    await waitFor(() => expect(toastText()).toMatch(/is no longer a voter/));
+    expect(toastText()).toContain("Removed through node-a's system account.");
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(sent[0]!.pathname).toBe(`/fleet/broker/remove-peer/${gone}`);
     expect(sent[0]!.searchParams.get("confirm")).toBe(gone);
   });
@@ -211,7 +218,8 @@ describe("broker membership", () => {
       target: { value: "node-c" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(screen.getByText(/is no\s+longer a voter/)).toBeTruthy());
+    await waitFor(() => expect(toastText()).toContain("node-c is no longer a voter"));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.pathname).toBe("/fleet/broker/remove/node-c");
     expect(sent[0]!.searchParams.get("confirm")).toBe("node-c");

@@ -470,7 +470,7 @@ export function EditPersonDialog({
     });
     if (!answer) return;
     onDone();
-    if (answer.kind === "done" && !answer.pending) onClose();
+    if (answer.kind === "done") onClose();
   }
 
   return (

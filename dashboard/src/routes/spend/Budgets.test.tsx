@@ -29,6 +29,8 @@ import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { toastText } from "~/testing.tsx";
+import { APPLIED_SENTENCE, APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import { sheetRules } from "~/test/sheets.ts";
 import {
   applyPageAction,
@@ -335,9 +337,11 @@ test("a seat's ceiling is checked before it is saved, as the seat itself", async
   });
   // The check that preceded it carried the same seat and no summary.
   expect(calls[2]!.body).toEqual({ ...PM_SEAT, token_budget: { month: 1000, day: 2_500_000 } });
-  // Saved, and applying until this node reports the epoch.
+  // Saved, and applying until this node reports the epoch: said by its toast.
   expect(screen.getByText("of 2.5M tokens")).toBeTruthy();
-  expect(screen.getByText("applying…")).toBeTruthy();
+  expect(toastText()).toContain("Set PM's daily token ceiling to 2.5M");
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(screen.queryByText(/applying/)).toBeNull();
 });
 
 describe("a saved ceiling, followed by this node", () => {
@@ -356,14 +360,14 @@ describe("a saved ceiling, followed by this node", () => {
     await settle();
     await edit(PM_DAY, "2.5M");
     expect(within(cell()).getByText("of 2.5M tokens")).toBeTruthy();
-    expect(within(cell()).getByText("applying…")).toBeTruthy();
+    expect(toastText()).toContain(APPLYING_SENTENCE);
     return store;
   }
 
   // A REFUSAL LEAVES THE APPLIED EPOCH WHERE IT WAS, so read alone it said
-  // "applying…" beside the saved ceiling for the life of the page while the
-  // gate went on enforcing the one before. Mutation: follow the save by the
-  // applied epoch alone and the cell keeps "of 2.5M" and "applying…".
+  // "applying" for the life of the page while the gate went on enforcing the
+  // one before. Mutation: follow the save by the applied epoch alone and the
+  // cell keeps "of 2.5M" and the toast "applying".
   test("refused by this node, it draws the ceiling still enforced and says so", async () => {
     const store = await saveDay();
     const asks = budgetAsks;
@@ -378,7 +382,7 @@ describe("a saved ceiling, followed by this node", () => {
     await settle();
     expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).getByText("refused by this node")).toBeTruthy();
-    expect(within(cell()).queryByText("applying…")).toBeNull();
+    expect(toastText()).not.toContain(APPLYING_SENTENCE);
     // Nothing moved here, so nothing is read again.
     expect(budgetAsks).toBe(asks);
   });
@@ -388,7 +392,7 @@ describe("a saved ceiling, followed by this node", () => {
   // the refused ceiling went back to the saved figure marked applying until
   // the socket came back. Mutation: follow the save by the live slice
   // (`useEngineHealth`) and read its absence as applying, as
-  // `nodeStanding(null)` did, and this reads "of 2.5M" and "applying…".
+  // `nodeStanding(null)` did, and this reads "of 2.5M".
   test("refused by this node, it stays so through a dropped socket", async () => {
     const store = await saveDay();
     act(() =>
@@ -405,7 +409,6 @@ describe("a saved ceiling, followed by this node", () => {
     await settle();
     expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).getByText("refused by this node")).toBeTruthy();
-    expect(within(cell()).queryByText("applying…")).toBeNull();
   });
 
   test("applied by this node, it says so and reads the budgets again", async () => {
@@ -421,13 +424,14 @@ describe("a saved ceiling, followed by this node", () => {
     );
     await settle();
     expect(budgetAsks).toBeGreaterThan(asks);
-    expect(within(cell()).getByText("applied")).toBeTruthy();
+    expect(toastText()).toContain(APPLIED_SENTENCE);
+    expect(within(cell()).queryByText("applied")).toBeNull();
   });
 
   // A LATER ACTIVATION THIS NODE TRIED FIRST, and refused: it will not come
   // back to this save, so the cell settles on the answer read again rather
   // than applying for ever. Mutation: drop `passed` from the settling
-  // standings and the cell says "applying…" for good.
+  // standings and the cell keeps the saved figure for good.
   test("passed by a later activation, it settles on the ceiling read again", async () => {
     const store = await saveDay();
     const asks = budgetAsks;

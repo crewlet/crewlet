@@ -28,7 +28,7 @@ import { QueryState } from "~/components/common.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { saysSomething, SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import { insightsPlan, type InsightsChange } from "~/lib/diagnosticsSettings.ts";
 import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import type {
@@ -175,11 +175,6 @@ function Consent({
       insightsPlan(change, `Set usage insights to ${SHARE_WORDS[share].label.toLowerCase()}`),
     );
   };
-  const saved = state.kind === "saved" ? state : null;
-  const mark =
-    saved && (saved.standing === "applying" || saved.standing === "refused")
-      ? `Saved, ${standingWords(saved.standing)}`
-      : "";
   // THE ENGINE SHARES ONLY ON THE LIST ACCEPTED, so an older one, or a newer
   // one accepted on another build, shares nothing.
   const stale = shareOf(answer.share) !== "off" && answer.accepted !== answer.schema;
@@ -230,19 +225,12 @@ function Consent({
             This engine&rsquo;s list of patterns differs from the one you accepted.
           </Callout>
         )}
-        {mark && (
-          <Text as="p" tone="secondary" role="status">
-            {mark}
-          </Text>
-        )}
-        {state.kind !== "saved" && (
-          <SettingWriteStatus
-            write={write}
-            unchanged="Already so."
-            onReload={onSaved}
-            answersWarning
-          />
-        )}
+        <SettingWriteStatus
+          write={write}
+          unchanged="Already so."
+          onReload={onSaved}
+          answersWarning
+        />
         <Disclosure title="What a record holds, and never holds" defaultOpen={shown === "off"}>
           <div className="col gap-2">
             <Text as="p">
@@ -348,7 +336,7 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
           </Callout>
         </Card.Body>
       )}
-      {write.state.kind !== "idle" && write.state.kind !== "saved" && (
+      {saysSomething(write.state) && (
         <Card.Body padding="md">
           <SettingWriteStatus
             write={write}

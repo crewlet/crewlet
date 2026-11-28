@@ -14,6 +14,8 @@ import type { LimitsAnswer } from "~/contract/limits.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { toastText } from "~/testing.tsx";
+import { APPLIED_SENTENCE, APPLYING_SENTENCE } from "~/lib/savedToast.ts";
 import {
   engineAnswer,
   mountSettings,
@@ -221,18 +223,20 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
     turn_engine: { max_iterations: 5 },
     _summary: "Limits: Review rounds per turn set to 5 (turn_engine.max_iterations)",
   });
-  // THE SAVED VALUE, MARKED AS APPLYING: the answer the page draws is what
-  // this node applied, which is still the value before.
+  // THE SAVED VALUE, drawn while this node applies it, and the save said by
+  // its toast rather than a word beside the value.
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  // THE WRITE'S OWN STATUS, beside the key's copy status the row also holds.
-  expect(within(row).getByText("applying…").getAttribute("role")).toBe("status");
+  expect(toastText()).toContain(
+    "Limits: Review rounds per turn set to 5 (turn_engine.max_iterations)",
+  );
+  expect(toastText()).toContain(APPLYING_SENTENCE);
+  expect(within(row).queryByText(/applying/)).toBeNull();
   expect(screen.queryByRole("spinbutton")).toBeNull();
 });
 
-// ONCE THIS NODE APPLIED IT the page re-reads, and the mark goes when the
-// answer carries the value.
-test("the applying mark goes once this node applied the revision", async () => {
+// ONCE THIS NODE APPLIED IT the page re-reads, and the toast says so in place.
+test("the save's toast says applied once this node applied the revision", async () => {
   stubEngine((call) => {
     if (call.method === "GET") return engineAnswer(DOC, 200, { ETag: '"r1"' });
     if (call.path.includes("dry_run=true")) return validAnswer();
@@ -259,8 +263,9 @@ test("the applying mark goes once this node applied the revision", async () => {
   expect(asked.filter((q) => q === "limits").length).toBeGreaterThan(before);
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).queryByText("applying…")).toBeNull();
   expect(within(row).getByText("Changed from 3")).toBeTruthy();
+  expect(toastText()).toContain(APPLIED_SENTENCE);
+  expect(toastText()).not.toContain(APPLYING_SENTENCE);
 });
 
 // THE DEFAULT IS THE KEY'S ABSENCE: an emptied field removes the key rather
