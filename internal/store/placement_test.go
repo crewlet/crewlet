@@ -198,6 +198,13 @@ var nodeEstatePlacements = []placement{
 			"node runs and dates its own instances.",
 	},
 	{
+		Table: "signed_request_taken",
+		Why: "The ids of the signed writes this node took, each until its " +
+			"channel stops admitting it, so a request replayed after a restart " +
+			"finds its id here and is refused rather than run again. Each node " +
+			"takes a scattered request once, for itself.",
+	},
+	{
 		Table: "llm_sign_in_window",
 		Why: "The newest reading of each sign-in's limit windows this node's " +
 			"calls heard, read back at an apply so an LLM fleet balances on what " +

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -136,7 +137,7 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 	node := &fakeNode{name: "git-a", units: chartOf("git-a")}
 	f.nodes["git-a"] = node
 	sized := &sizer{q: f.start(t)}
-	stop, err := Serve(t.Context(), sized, ServerOptions{Self: "git-a", Local: node,
+	stop, err := Serve(t.Context(), sized, ServerOptions{Taken: signedasktest.NewLedger(), Self: "git-a", Local: node,
 		Git: gitHalf{node: &fakeGit{name: "git-a"}}, Seams: node.seams(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +210,7 @@ func serveHeldGit(t *testing.T, f *fleet, half *heldGit) {
 	t.Helper()
 	node := &fakeNode{name: "git-a", units: chartOf("git-a")}
 	f.nodes["git-a"] = node
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "git-a", Local: node, Git: half,
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(), Self: "git-a", Local: node, Git: half,
 		Seams: node.seams(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -112,9 +113,11 @@ func sealUnbound(t *testing.T, req request) []byte {
 
 // opened is a request as a member of the test fleet reads it off the wire:
 // verified and decoded, the zero request where it is not the fleet's.
-func opened(sealed []byte) request {
-	admitted := fleetEnvelopes.admit(sealed, signedask.NewGuard(), time.Now())
-	if admitted.Disposition != signedask.Admitted {
+func opened(ctx context.Context, sealed []byte) request {
+	// A WRITE IS UNRECORDED at a guard that keeps nothing, and verified all
+	// the same.
+	admitted := fleetEnvelopes.admit(ctx, sealed, signedask.NewGuard(), time.Now())
+	if admitted.Disposition != signedask.Admitted && admitted.Disposition != signedask.Unrecorded {
 		return request{}
 	}
 	return admitted.Request
@@ -224,20 +227,20 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, forge := range map[string]func(sealed []byte) []byte{
-		"the fleet's, in a shape this build cannot decode": func([]byte) []byte {
+	for name, forge := range map[string]func(ctx context.Context, sealed []byte) []byte{
+		"the fleet's, in a shape this build cannot decode": func(context.Context, []byte) []byte {
 			return fleetReplies.Seal([]byte(`{"node":"data-x","request":7}`))
 		},
-		"not signed by the fleet": func(sealed []byte) []byte {
-			return outsiders.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
+		"not signed by the fleet": func(ctx context.Context, sealed []byte) []byte {
+			return outsiders.sealReply(reply{Node: "data-x", Request: opened(ctx, sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":99}`)})
 		},
-		"the fleet's answer to another request": func([]byte) []byte {
+		"the fleet's answer to another request": func(context.Context, []byte) []byte {
 			return fleetEnvelopes.sealReply(reply{Node: "data-x", Request: "somebody-elses",
 				Result: json.RawMessage(`{"TotalHint":99}`)})
 		},
-		"altered after it was signed": func(sealed []byte) []byte {
-			out := fleetEnvelopes.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
+		"altered after it was signed": func(ctx context.Context, sealed []byte) []byte {
+			out := fleetEnvelopes.sealReply(reply{Node: "data-x", Request: opened(ctx, sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":11}`)})
 			return bytes.Replace(out, []byte(`"TotalHint":11`), []byte(`"TotalHint":99`), 1)
 		},
@@ -247,7 +250,7 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 			f := newFleet(t)
 			impostor := f.start(t)
 			stop, err := impostor.Serve(t.Context(), Subject("data-x"), queue.ConcurrentAnswers,
-				func(_ context.Context, raw []byte) ([]byte, error) { return forge(raw), nil })
+				func(ctx context.Context, raw []byte) ([]byte, error) { return forge(ctx, raw), nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -309,7 +312,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("captured %d requests, want the one", len(sent))
 	}
-	first := opened(sent[0])
+	first := opened(t.Context(), sent[0])
 	if first.ID == "" {
 		t.Fatal("the captured request does not open as the fleet's")
 	}
@@ -327,6 +330,92 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	if got := f.nodes["data-a"].ops(); !slices.Equal(got, []string{"op-once"}) {
 		t.Fatalf("the node ran %v, want the write once", got)
 	}
+}
+
+// A WRITE REPLAYED AFTER ITS NODE RESTARTS RUNS ONCE: the node's own file
+// keeps the id of every write it took (ServerOptions.Taken), so the server it
+// starts again refuses a write captured before the restart as a replay, and
+// the write ran exactly once.
+//
+// Mutations: request.Writes answers false, or the guard starts empty: the
+// replay runs the write again, red.
+func TestAWriteReplayedAfterItsNodeRestartsRunsOnce(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	node := &fakeNode{name: "data-a", units: chartOf("data-a")}
+	f.nodes[node.name] = node
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{node.name} })
+	file := signedasktest.NewLedger()
+	stop := serveOver(t, f, node, file)
+	capture := &capturingAsker{Asker: f.start(t)}
+	r, err := NewRouter(RouterOptions{Self: "agent-2", Queue: capture, Placement: f.placement, Git: f.git,
+		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-once", worklet.Task{Project: "ENG"},
+		nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	sent := capture.payloads()
+	if len(sent) != 1 {
+		t.Fatalf("captured %d requests, want the one", len(sent))
+	}
+
+	if err := stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	serveOver(t, f, node, file)
+	replies, err := f.start(t).Ask(t.Context(), Subject(node.name), sent[0], 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("replay = (%d replies, %v)", len(replies), err)
+	}
+	if rep := rawReply(t, replies[0]); rep.Unserved != unservedStale || !strings.Contains(rep.Detail, "replay") {
+		t.Fatalf("a write replayed after the restart was answered %+v, want it refused as a replay", rep)
+	}
+	if got := node.ops(); !slices.Equal(got, []string{"op-once"}) {
+		t.Fatalf("the node ran %v, want the write once", got)
+	}
+}
+
+// A WRITE WHOSE ID THE NODE'S FILE WILL NOT KEEP RUNS NOTHING THERE: the node
+// answers it unrecorded, so the router asks the next data node (here, none),
+// while the node's reads, whose ids are memory's alone, are served as ever.
+//
+// Mutation: the server runs an unrecorded request: the task is created, red.
+func TestAWriteTheNodesFileWillNotKeepRunsNothing(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	node := &fakeNode{name: "data-a", units: chartOf("data-a")}
+	f.nodes[node.name] = node
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{node.name} })
+	file := signedasktest.NewLedger()
+	serveOver(t, f, node, file)
+	file.Refuse(errors.New("disk full"))
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-refused", worklet.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "disk full") {
+		t.Fatalf("a write the file would not keep = %v, want it unserved naming the cause", err)
+	}
+	if node.askedFor("create") {
+		t.Fatal("a write the node's file would not keep ran")
+	}
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
+		t.Errorf("a read while the file refuses = %v, want it served", err)
+	}
+}
+
+// serveOver serves node on the fleet's broker keeping its writes' ids in file,
+// as a node's own file outlives its process, and answers the withdrawal.
+func serveOver(t *testing.T, f *fleet, node *fakeNode, file signedask.Ledger) queue.Unsubscribe {
+	t.Helper()
+	stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{Self: node.name,
+		Local: node, Seams: node.seams(), Envelopes: fleetEnvelopes, Taken: file})
+	if err != nil {
+		t.Fatalf("serve %s: %v", node.name, err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	return stop
 }
 
 // A REQUEST NOBODY IS WAITING FOR RUNS NOTHING: one whose deadline had passed
@@ -388,7 +477,7 @@ func TestEnvelopeDomainsNeverVerifyAsEachOther(t *testing.T) {
 		t.Error("a request opened as a reply")
 	}
 	for name, sealed := range map[string][]byte{"a reply": rep, "a tracker record": asRecord} {
-		if got := fleetEnvelopes.admit(sealed, signedask.NewGuard(), time.Now()); got.Disposition != signedask.Tampered {
+		if got := fleetEnvelopes.admit(t.Context(), sealed, signedask.NewGuard(), time.Now()); got.Disposition != signedask.Tampered {
 			t.Errorf("%s opened as a request: %s", name, got.Disposition)
 		}
 	}
@@ -406,7 +495,7 @@ func TestNothingIsBuiltWithoutEnvelopes(t *testing.T) {
 		Session: NewSession()}); !errors.Is(err, errNoEnvelopes) {
 		t.Errorf("a router with no envelopes = %v, want it refused", err)
 	}
-	if _, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-a",
+	if _, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a",
 		Local: &fakeNode{}}); !errors.Is(err, errNoEnvelopes) {
 		t.Errorf("a server with no envelopes = %v, want it refused", err)
 	}
@@ -419,7 +508,7 @@ func TestNothingIsBuiltWithoutEnvelopes(t *testing.T) {
 func serveAs(t *testing.T, f *fleet, node *fakeNode, env *Envelopes) {
 	t.Helper()
 	f.nodes[node.name] = node
-	stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{
+	stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: node.name, Local: node, Seams: node.seams(), Envelopes: env,
 	})
 	if err != nil {

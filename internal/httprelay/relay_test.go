@@ -147,8 +147,14 @@ func (silentFabric) Serve(context.Context, string, int, queue.AnswerFunc) (queue
 // exchanges end, before the bubble does.
 func bubbledHolder(t *testing.T, h http.Handler) *Relay {
 	t.Helper()
+	return bubbledHolderAs(t, "holder:incarnation", h)
+}
+
+// bubbledHolderAs is [bubbledHolder] as the incarnation owner.
+func bubbledHolderAs(t *testing.T, owner string, h http.Handler) *Relay {
+	t.Helper()
 	rl, err := New(Options{
-		Fabric: silentFabric{}, Name: "testrelay", Node: "holder", Owner: "holder:incarnation", Keyring: ring,
+		Fabric: silentFabric{}, Name: "testrelay", Node: "holder", Owner: owner, Keyring: ring,
 		Admit: func(*http.Request) Verdict { return Serve }, Handler: h, Answers: queue.NewAnswerBudget(nil),
 	})
 	if err != nil {
@@ -509,6 +515,60 @@ func TestARepeatedOpenRunsTheRequestOnce(t *testing.T) {
 		synctest.Wait()
 		if n := runs.Load(); n != 1 {
 			t.Errorf("past every timer the handler had run %d times for one exchange, want 1", n)
+		}
+	})
+}
+
+// AN OPEN REPLAYED AT A HOLDER THAT RESTARTED RUNS NOTHING, which is why the
+// relay keeps no id in the node's file (openRequest.Writes): an open names the
+// holder's incarnation, new at every boot, and the restarted process, with a
+// fresh guard that never took the open, answers it elsewhere.
+//
+// Mutation: drop the incarnation check in Relay.answer, so the restarted
+// holder starts the exchange: the handler runs twice, red.
+func TestAnOpenReplayedAtARestartedHolderRunsNothing(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var runs atomic.Int32
+		release := make(chan struct{})
+		defer close(release)
+		handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			runs.Add(1)
+			<-release
+		})
+		before := bubbledHolderAs(t, "holder:before-the-restart", handler)
+		id := signedask.NewID()
+		sealed, err := before.opens.SealRequest(openRequest{
+			ID: id, Deadline: time.Now().Add(time.Minute), Kind: kindOpen,
+			Owner: before.owner, Exchange: "EXCHANGE", Request: &Request{Method: http.MethodPost, URI: "/x"},
+		})
+		if err != nil {
+			t.Fatalf("SealRequest: %v", err)
+		}
+		answer := func(rl *Relay) Verdict {
+			raw, err := rl.answer(t.Context(), sealed)
+			if err != nil {
+				t.Fatalf("answer: %v", err)
+			}
+			rep, why, err := rl.opens.OpenReply(raw, id)
+			if err != nil || why != "" {
+				t.Fatalf("OpenReply: %q, %v", why, err)
+			}
+			return rep.Verdict
+		}
+		if v := answer(before); v != Serve {
+			t.Fatalf("the first open = %s, want serve", v)
+		}
+		synctest.Wait()
+		after := bubbledHolderAs(t, "holder:after-the-restart", handler)
+		if v := answer(after); v != Elsewhere {
+			t.Errorf("the open replayed at the restarted holder = %s, want elsewhere", v)
+		}
+		synctest.Wait()
+		time.Sleep(pastEveryTimer(after))
+		synctest.Wait()
+		if n := runs.Load(); n != 1 {
+			t.Errorf("the handler ran %d times, want once: a replay ran at the restarted holder", n)
 		}
 	})
 }

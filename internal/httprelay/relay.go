@@ -158,7 +158,7 @@ func (rl *Relay) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer release()
-	admitted := rl.opens.Admit(raw, rl.taken, rl.time.Now())
+	admitted := rl.opens.Admit(ctx, raw, rl.taken, rl.time.Now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.KeyUnknown:

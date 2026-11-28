@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The native backends on a node that holds no data.
@@ -210,7 +211,7 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	}
 	opts := estate.ServerOptions{
 		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
-		Answers: e.answerBudget,
+		Answers: e.answerBudget, Taken: store.NewTakenRequests(e.backends.Store),
 	}
 	if e.profile.Roles.Has(placement.RoleGitlet) {
 		opts.Git = e.localGit()

@@ -73,6 +73,10 @@ type ReplayRequest struct {
 // Binding is the request's id and deadline (internal/signedask).
 func (r ReplayRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is false: a replay hands frames back and changes nothing
+// (internal/signedask).
+func (r ReplayRequest) Writes() bool { return false }
+
 // ReplayReply is the running node's answer: the page of frames, encrypted
 // under [ReplayAAD] in Page, where Answer is [AnswerDone].
 type ReplayReply struct {
@@ -103,6 +107,12 @@ type StopRequest struct {
 
 // Binding is the request's id and deadline (internal/signedask).
 func (r StopRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
+
+// Writes is true: a stop ends a turn, and a turn's id is its client's
+// idempotency key's, so a turn retried on the node after a restart is the
+// turn a replayed stop names (internal/signedask). Kept only in a data node's
+// durable file: only ingress serves stops, and ingress requires data.
+func (r StopRequest) Writes() bool { return true }
 
 // StopReply is the running node's answer: the state the turn ended in, where
 // Answer is [AnswerDone]. A state and nothing a person wrote.
@@ -309,14 +319,17 @@ func admitted[Q addressed, R signedask.Reply](ctx context.Context, f *Fleet, ch 
 	seen *signedask.Guard, raw []byte, unverified func(Q, string) R) (Q, *R, error) {
 
 	var zero Q
-	a := ch.Admit(raw, seen, f.now())
+	// ADDRESSED BEFORE THE TAKE: a request names this node, or none (a probe
+	// every node answers), so only the node running the turn keeps a stop.
+	a := ch.AdmitTo(ctx, raw, seen, f.now(), func(q Q) bool {
+		node, _ := q.target()
+		return node == f.node || node == ""
+	})
 	switch a.Disposition {
 	case signedask.Admitted:
-		// A request names this node, or none: a probe every node answers.
-		if node, _ := a.Request.target(); node != f.node && node != "" {
-			return zero, nil, errNotThisNode
-		}
 		return a.Request, nil, nil
+	case signedask.NotAddressed:
+		return zero, nil, errNotThisNode
 	case signedask.KeyUnknown:
 		// UNTRUSTED, read for the one thing the answer needs: whether
 		// the request names this node, so only that node says why it

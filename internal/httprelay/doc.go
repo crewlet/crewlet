@@ -75,6 +75,13 @@
 // ride a [signedask.Channel] under the fleet's keyring, each request bound to
 // an id and a deadline, each acknowledgement bound to the frame it answers.
 //
+// NEITHER KEEPS AN ID PAST A RESTART (internal/signedask's "A write's id
+// outlives a restart"), because no replay of either outlives the process it
+// reached: an OPEN names the holder's incarnation, new at every boot, so a
+// restarted holder answers [Elsewhere] and runs nothing, and a frame goes to
+// one exchange's subject, which nobody serves once its entry restarts. A
+// wider admission window changes neither.
+//
 // A relay's name scopes its two channels, `<name>.open` and `<name>.frame`, so
 // two relays never share a signing domain. [New] and [Relay.Domains] build them
 // in one place, which is how the engine's channel gate holds every domain a

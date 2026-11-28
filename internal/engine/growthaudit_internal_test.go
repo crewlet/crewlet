@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -30,7 +31,7 @@ func routedGrowthAudit(t *testing.T, served estate.LocalBackends) GrowthAudit {
 		return q
 	}
 	envelopes := routerEnvelopes(t)
-	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-1", Local: served, Envelopes: envelopes,
 	})
 	if err != nil {

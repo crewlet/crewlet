@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -90,7 +91,7 @@ func TestAPageHoldsItsWeightUntilItsReplyAndOneValueNone(t *testing.T) {
 	meter := &budgetMeter{freed: make(chan struct{})}
 	reads := weighedReads{meter: meter, mu: &sync.Mutex{}, saw: map[string]int64{}}
 	f := &fleet{broker: memory.NewBroker()}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-a", Local: weighedCopy{reads: reads},
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a", Local: weighedCopy{reads: reads},
 		Envelopes: fleetEnvelopes, Answers: queue.NewAnswerBudget(meter)})
 	if err != nil {
 		t.Fatal(err)

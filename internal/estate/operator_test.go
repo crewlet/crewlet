@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -314,7 +315,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	d := &desk{units: chartOf("data-d")}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: d, Seams: ServerSeams{Units: d.units}, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {

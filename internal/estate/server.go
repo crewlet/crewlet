@@ -48,6 +48,11 @@ type ServerOptions struct {
 	// reply it answers with — required: see [Envelopes].
 	Envelopes *Envelopes
 
+	// Taken is this node's own file as the guard keeps the id of every
+	// write it takes in it, so a write replayed after a restart is refused
+	// (internal/signedask, "A write's id outlives a restart"). Required.
+	Taken signedask.Ledger
+
 	// Now is this node's clock, injected for tests: the one a request's
 	// deadline is admitted on. Nil is the wall clock.
 	Now func() time.Time
@@ -78,6 +83,9 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 		return nil, errors.New("estate: serve needs this node's id — it is the subject other nodes ask")
 	case opts.Envelopes == nil:
 		return nil, errNoEnvelopes
+	case opts.Taken == nil:
+		return nil, errors.New("estate: serve needs this node's file to keep the ids of the " +
+			"writes it takes, or a write replayed after a restart would run again")
 	}
 	if opts.Answers == nil {
 		opts.Answers = queue.NewAnswerBudget(nil)
@@ -88,9 +96,15 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 	}
 	// ONE SERVER FOR EVERY LANE, so one guard remembers every request id
 	// the node has taken whichever lane it arrived on: a replay sent to
-	// another lane's subject is the same replay.
+	// another lane's subject is the same replay. NOT SERVED where the file
+	// cannot say what it took before a restart: the error ends the node's
+	// start, and every asker meanwhile asks the other data nodes.
+	seen, err := opts.Envelopes.keptGuard(ctx, opts.Taken, now())
+	if err != nil {
+		return nil, fmt.Errorf("estate: %s cannot serve: %w", opts.Self, err)
+	}
 	srv := server{self: opts.Self, local: opts.Local, git: opts.Git, seams: opts.Seams,
-		env: opts.Envelopes, now: now, seen: signedask.NewGuard(), answers: opts.Answers,
+		env: opts.Envelopes, now: now, seen: seen, answers: opts.Answers,
 		writes: make(chan struct{}, gitWritesHeld)}
 	registered := lanes
 	if opts.Git != nil {
@@ -150,7 +164,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	// wait for a lane's slot (queue.Arrived), on the runtime clock every wait
 	// for it is counted on; the node's own clock admits it.
 	arrived := queue.Arrived(ctx)
-	admitted := s.env.admit(raw, s.seen, s.now())
+	admitted := s.env.admit(ctx, raw, s.seen, s.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
 		// NOT THE FLEET'S, so nothing in it is believed, not even the id a
@@ -180,6 +194,12 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
 			"from", admitted.Request.From, "op", admitted.Request.Op, "detail", admitted.Why)
 		out.Request, out.Unserved, out.Detail = admitted.ID, unservedStale,
+			fmt.Sprintf("%s: %s", s.self, admitted.Why)
+		return s.encodeReply(out)
+	case signedask.Unrecorded:
+		// A FACT ABOUT THIS NODE'S FILE, logged at error by the guard:
+		// nothing ran, so the router asks the next data node.
+		out.Request, out.Unserved, out.Detail = admitted.ID, unservedUnrecorded,
 			fmt.Sprintf("%s: %s", s.self, admitted.Why)
 		return s.encodeReply(out)
 	}

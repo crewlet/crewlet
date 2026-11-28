@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -136,7 +137,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	peer := &peerCopy{}
 	envelopes := routerEnvelopes(t)
-	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-peer", Local: peer, Envelopes: envelopes,
 	})
 	if err != nil {

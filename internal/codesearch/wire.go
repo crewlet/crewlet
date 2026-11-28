@@ -94,6 +94,10 @@ type Request struct {
 // Binding is the request's id and deadline (internal/signedask).
 func (r Request) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is false: a search reads the repositories it is assigned and
+// changes nothing (internal/signedask).
+func (r Request) Writes() bool { return false }
+
 // Assigned is one repository a node answers for.
 type Assigned struct {
 	RepoID string `json:"repo_id"`

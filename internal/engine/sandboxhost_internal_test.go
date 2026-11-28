@@ -467,8 +467,8 @@ func TestOnlyTheAskedHostsSignedReplyIsTheAnswer(t *testing.T) {
 				t.Fatalf("start queue: %v", err)
 			}
 			taken := signedask.NewGuard()
-			stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
-				admitted := fleet.wire.Admit(raw, taken, time.Now())
+			stop, err := q.Serve(t.Context(), topics.SandboxBoxRead, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
+				admitted := fleet.wire.Admit(ctx, raw, taken, time.Now())
 				if admitted.Disposition != signedask.Admitted {
 					return nil, errors.New(admitted.Why)
 				}

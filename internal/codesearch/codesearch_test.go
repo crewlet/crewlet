@@ -193,7 +193,7 @@ type fleet struct {
 
 func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool) error {
 	if w, err := codesearch.NewWire(fleetRing); err == nil {
-		asked := w.Admit(request, signedask.NewGuard(), time.Now()).Request
+		asked := w.Admit(ctx, request, signedask.NewGuard(), time.Now()).Request
 		f.versions, f.waits = append(f.versions, asked.Version), append(f.waits, asked.BudgetMS)
 	}
 	var replies [][]byte

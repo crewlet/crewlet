@@ -232,6 +232,10 @@ type FleetOptions struct {
 	Frames  *signedask.OneWay[Sealed]
 	Replays *signedask.Channel[ReplayRequest, ReplayReply]
 	Stops   *signedask.Channel[StopRequest, StopReply]
+	// Taken is this node's own file as the stop channel's guard keeps the id
+	// of every stop it takes in it, so a stop replayed after a restart is
+	// refused ([StopRequest.Writes]).
+	Taken signedask.Ledger
 	// AskBudget bounds one ask; zero is [DefaultAskBudget].
 	AskBudget time.Duration
 	// Answers is the node's answer budget a replay holds its weight of
@@ -251,6 +255,7 @@ type Fleet struct {
 	frames    *signedask.OneWay[Sealed]
 	replays   *signedask.Channel[ReplayRequest, ReplayReply]
 	stops     *signedask.Channel[StopRequest, StopReply]
+	taken     signedask.Ledger
 	askBudget time.Duration
 	answers   *queue.AnswerBudget
 	now       func() time.Time
@@ -258,7 +263,8 @@ type Fleet struct {
 
 	// out is the publish backlog the sender drains in order.
 	out chan wire.Frame
-	// replayTaken and stopTaken are the request ids this node has taken.
+	// replayTaken and stopTaken are the request ids this node has taken;
+	// stopTaken is built over taken at [Fleet.Start].
 	replayTaken, stopTaken *signedask.Guard
 
 	mu      sync.Mutex
@@ -275,6 +281,7 @@ func NewFleet(o FleetOptions) (*Fleet, error) {
 		"Node": strings.TrimSpace(o.Node) == "", "Broker": o.Broker == nil,
 		"Roster": o.Roster == nil, "Cipher": o.Cipher == nil, "Frames": o.Frames == nil,
 		"Replays": o.Replays == nil, "Stops": o.Stops == nil, "Answers": o.Answers == nil,
+		"Taken": o.Taken == nil,
 	} {
 		if absent {
 			missing = append(missing, name)
@@ -298,9 +305,9 @@ func NewFleet(o FleetOptions) (*Fleet, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Fleet{node: o.Node, broker: o.Broker, roster: o.Roster, cipher: o.Cipher,
-		frames: o.Frames, replays: o.Replays, stops: o.Stops, askBudget: budget, answers: o.Answers, now: now,
-		log: logging.Get("assistant.live"), out: make(chan wire.Frame, PublishBacklog),
-		replayTaken: signedask.NewGuard(), stopTaken: signedask.NewGuard()}, nil
+		frames: o.Frames, replays: o.Replays, stops: o.Stops, taken: o.Taken, askBudget: budget,
+		answers: o.Answers, now: now, log: logging.Get("assistant.live"),
+		out: make(chan wire.Frame, PublishBacklog), replayTaken: signedask.NewGuard()}, nil
 }
 
 // Start makes this node an answerer of its peers' replays and Stops for the
@@ -315,6 +322,13 @@ func (f *Fleet) Start(ctx context.Context, server Server) error {
 	if f.server != nil {
 		return errors.New("live: the fleet half is already started")
 	}
+	// NOT SERVED where the file cannot say which stops this node took
+	// before it restarted: the error ends the node's start.
+	stopTaken, err := f.stops.KeptGuard(ctx, f.taken, f.now())
+	if err != nil {
+		return fmt.Errorf("live: %w", err)
+	}
+	f.stopTaken = stopTaken
 	for _, s := range []struct {
 		subject string
 		answer  queue.AnswerFunc

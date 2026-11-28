@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -166,7 +167,7 @@ func TestARoutedReadPastItsBoundIsCutAndPagedToTheEnd(t *testing.T) {
 	}
 	node := pagedCopy{commands: pagedCommands{rows: commands}, sessions: pagedSessions{rows: sessions}}
 	f := &fleet{broker: memory.NewBroker()}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-a", Local: node,
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a", Local: node,
 		Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)

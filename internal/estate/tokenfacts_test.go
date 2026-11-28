@@ -304,7 +304,7 @@ type replayingBroker struct {
 func (b *replayingBroker) Ask(ctx context.Context, subject string, request []byte,
 	want int) ([][]byte, error) {
 
-	asked := opened(request)
+	asked := opened(ctx, request)
 	b.mu.Lock()
 	kept := b.kept
 	b.mu.Unlock()

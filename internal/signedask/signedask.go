@@ -93,12 +93,9 @@
 // without one judges the deadline on the taking node's clock alone. It is the
 // channel's to state, and none unless it does, because what a wider window
 // costs is a longer replay window, and what a replay does is the channel's
-// receiver's to weigh. And what a node remembers lives in its memory: a node
-// that restarted inside a request's window has forgotten the ids it took, so a
-// replay there is refused only once the deadline and the allowance have
-// passed, and what keeps it harmless meanwhile is what the channel's receiver
-// makes of it. A [Guard] is one per serving node and channel, never shared: a
-// scatter hands one request to every node, and each must take it once.
+// receiver's to weigh. A [Guard] is one per serving node and channel, never
+// shared: a scatter hands one request to every node, and each must take it
+// once.
 //
 // THE WAIT CROSSES AS A DURATION, never as the deadline: read on the taking
 // node's clock, the asker's instant cut the work it bounds short by the
@@ -118,7 +115,34 @@
 // is what makes it unique across a fleet without a coordinator and
 // unguessable by a member of the fleet that did not see the request.
 //
-// # What arrives is one of five, and each is handled once
+// # A write's id outlives a restart
+//
+// A node that restarted inside a request's window would have forgotten an id
+// it held only in memory, and a captured request replayed at it would be taken
+// again: harmless for a read, and for a write the write runs again as the
+// actor it names. So every request says whether it writes
+// ([Request.Writes]), and a guard keeps a write's id in the node's own file
+// ([Channel.KeptGuard], [Ledger]), committed BEFORE the request is admitted,
+// for exactly as long as it holds it in memory. The FILE HAS THE LAST WORD: a
+// write whose id it holds already is a replay, whatever the memory says, so a
+// restart forgets nothing and the guard reads nothing back at boot. A write
+// whose id the file refuses runs nothing
+// ([Unrecorded]), and a guard without a file refuses every write: nothing
+// that writes is ever taken unrecorded. Reads stay in memory, where a restart
+// costs nothing. Each channel's request says whether it writes, and why a
+// note to a turn and the box bridge's relay need no file: each is taken only
+// by the process it names, which a restart replaces.
+//
+// The file holds no id past its window: a sweep of the memory ([Guard])
+// deletes every row past its own, and so does a guard's start, so its rows are
+// bounded as the memory is, by the writes a channel admits inside one window.
+//
+// BOTH INSTANTS ARE THIS NODE'S WALL CLOCK: admission judges the deadline on
+// it, and an id is kept until the deadline plus the allowance on it, so the
+// two move together. A clock stepped back only keeps an id longer; one
+// stepped forward forgets an id only once it refuses the request anyway.
+//
+// # What arrives is one of seven, and each is handled once
 //
 // [Channel.Admit] decides what a serving node may do with what it was sent:
 //
@@ -138,6 +162,11 @@
 //     deadline, its deadline and the allowance its channel gives two nodes'
 //     clocks had passed when it arrived, or this node has already taken its
 //     id. Runs nothing.
+//   - UNRECORDED: the fleet's, a write, and this node could not keep its id
+//     in its own file. A fact about THIS NODE: it runs nothing, and the asker
+//     may ask another.
+//   - NOT ADDRESSED: the fleet's, and for another node of a scatter
+//     ([Channel.AdmitTo]). Takes nothing, so only the node it names keeps it.
 //
 // # And one way, for a frame a node shows to people
 //
@@ -180,6 +209,7 @@
 package signedask
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -187,9 +217,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
+
+var log = logging.Get("signedask")
 
 // Request is a channel's request as the envelope binds it.
 //
@@ -201,6 +234,12 @@ type Request interface {
 	// instant, by the sending node's clock, after which nobody is waiting
 	// for its answer.
 	Binding() (id string, deadline time.Time)
+
+	// Writes reports whether carrying the request out changes anything a
+	// second run would change again: a write as the actor it names, a voter
+	// removed, a note offered, a turn stopped. Its id is then kept in the
+	// node's own file until its window ends ([Channel.KeptGuard]).
+	Writes() bool
 }
 
 // Reply is a channel's reply as the envelope binds it.
@@ -220,6 +259,7 @@ type Reply interface {
 // believe nothing it was told. Immutable and safe for concurrent use; the ids a
 // serving node has taken live in its [Guard], not here.
 type Channel[Q Request, R Reply] struct {
+	name           string
 	requestDomain  string
 	replyDomain    string
 	requests       *recordseal.Signer
@@ -245,10 +285,10 @@ type options struct {
 // request and the node that takes it may stand: the taking node admits a request
 // until its deadline plus apart by its own clock, and remembers its id exactly as
 // long — or a replay arriving after it forgot the id, inside the allowance, would
-// be taken again. Each channel states its own, because what a wider window costs
-// is a replay at a node that restarted inside it, and what a replay does is the
-// channel's to weigh. A channel built without it judges the sender's deadline on
-// its own clock, as every channel did. [New] refuses a negative one.
+// be taken again. Each channel states its own, because a wider window keeps every
+// id longer, a write's in the node's file too, and lets a read be taken again at
+// a node that restarted inside it. A channel built without it judges the
+// sender's deadline on its own clock alone. [New] refuses a negative one.
 func ClockAllowance(apart time.Duration) Option {
 	return func(o *options) { o.apart = apart }
 }
@@ -274,7 +314,7 @@ func New[Q Request, R Reply](name string, ring recordseal.Keyring, opts ...Optio
 		return nil, fmt.Errorf("signedask: %s: a clock allowance of %v is negative — it is how "+
 			"far two nodes' clocks may stand apart, zero or more", name, chosen.apart)
 	}
-	c := &Channel[Q, R]{requestDomain: name + ".request", replyDomain: name + ".reply",
+	c := &Channel[Q, R]{name: name, requestDomain: name + ".request", replyDomain: name + ".reply",
 		apart: chosen.apart}
 	var err error
 	if c.requests, err = recordseal.NewSigner(c.requestDomain, ring); err != nil {
@@ -325,7 +365,7 @@ func (c *Channel[Q, R]) SealRequest(req Q) ([]byte, error) {
 
 // Disposition is what a serving node may do with one request it was sent.
 //
-// A NAMED TYPE WITH FIVE VALUES rather than a bool, for the state log's own
+// A NAMED TYPE WITH SEVEN VALUES rather than a bool, for the state log's own
 // [recordseal.Verdict] reason: the failures have different answers — a key this
 // node does not hold is "ask another node", a tampered frame is "ask nobody,
 // believe nothing" — and a caller handed `false` for all of them would have to
@@ -343,14 +383,20 @@ const (
 	Undecodable Disposition = "undecodable"
 	// Stale is a request the fleet signed that is not to be taken now.
 	Stale Disposition = "stale"
+	// Unrecorded is a write the fleet signed whose id this node could not
+	// keep in its own file, so it runs nothing here.
+	Unrecorded Disposition = "unrecorded"
+	// NotAddressed is a request the fleet signed for another node
+	// ([Channel.AdmitTo]): nothing taken, nothing kept.
+	NotAddressed Disposition = "not_addressed"
 )
 
 // Admission is what [Channel.Admit] concluded about one request.
 type Admission[Q Request] struct {
 	Disposition Disposition
 
-	// Request is the request. VERIFIED where the disposition is [Admitted]
-	// or [Stale]; UNTRUSTED where it is [KeyUnknown] — decoded so the
+	// Request is the request. VERIFIED where the disposition is [Admitted],
+	// [Stale] or [Unrecorded]; UNTRUSTED where it is [KeyUnknown] — decoded so the
 	// answer can say which id and which object it is about, and never
 	// carried out — and the zero value otherwise.
 	Request Q
@@ -371,8 +417,21 @@ type Admission[Q Request] struct {
 // against what seen has taken. An id is TAKEN only when the request is
 // admitted — and taken whether or not the caller then runs it, because every
 // asker mints a fresh id for every ask: a second arrival of one id is a replay
-// whatever the first was answered.
-func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admission[Q] {
+// whatever the first was answered. A write is admitted only once its id is
+// committed to the node's file; ctx bounds that write.
+func (c *Channel[Q, R]) Admit(ctx context.Context, sealed []byte, seen *Guard, now time.Time) Admission[Q] {
+	return c.AdmitTo(ctx, sealed, seen, now, nil)
+}
+
+// AdmitTo is [Channel.Admit] on a channel whose requests each name the node
+// they are for, scattered to every node: addressed says whether this node is
+// the one. It is asked only of a request the fleet signed, after it decoded,
+// so nothing unsigned learns which node holds what; and BEFORE the take, so a
+// request for another node is [NotAddressed], taking no id and writing no row.
+// Nil addresses every request.
+func (c *Channel[Q, R]) AdmitTo(ctx context.Context, sealed []byte, seen *Guard, now time.Time,
+	addressed func(Q) bool) Admission[Q] {
+
 	var out Admission[Q]
 	body, verdict := c.requestsOpened.Open(sealed)
 	switch verdict {
@@ -399,8 +458,12 @@ func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admissi
 	out.Request = req
 	id, deadline := req.Binding()
 	out.ID = id
-	if why := seen.take(id, deadline, c.apart, now); why != "" {
-		out.Disposition, out.Why = Stale, why
+	if addressed != nil && !addressed(req) {
+		out.Disposition, out.Why = NotAddressed, "the request is for another node"
+		return out
+	}
+	if refused, why := seen.take(ctx, id, deadline, c.apart, now, req.Writes()); why != "" {
+		out.Disposition, out.Why = refused, why
 		return out
 	}
 	out.Disposition = Admitted
@@ -457,7 +520,8 @@ func (c *Channel[Q, R]) OpenReply(sealed []byte, asked string) (rep R, why strin
 // replay, and one past that instant is refused before it is looked up — so an
 // id forgotten then is refused either way, and the set never holds more than
 // the requests its channel could still admit. Each entry keeps its own instant,
-// and a guard serves one channel, so one allowance.
+// and a guard serves one channel, so one allowance. A write's id is kept in
+// the node's file as well (package doc, "A write's id outlives a restart").
 //
 // ONE PER SERVING NODE AND CHANNEL, never shared between nodes: a scatter
 // hands the same request to every node, and each of them takes it once.
@@ -470,6 +534,25 @@ type Guard struct {
 	// the cost of sweeping is spread across as many admissions as it has
 	// entries to visit.
 	sweepAt int
+
+	// file keeps the ids of the writes this guard takes under channel, its
+	// channel's name; nil on a guard that keeps nothing past a restart,
+	// which refuses every write ([NewGuard]).
+	file    Ledger
+	channel string
+}
+
+// Ledger is the node's own file as a guard keeps the ids of the writes it
+// takes in it (internal/store's TakenRequests). Every row names its channel,
+// so one file holds every channel's apart.
+type Ledger interface {
+	// Keep records id as taken on channel until until, committed durably
+	// before it returns. fresh is false, and nothing changed, where the file
+	// holds the id already: a replay.
+	Keep(ctx context.Context, channel, id string, until time.Time) (fresh bool, err error)
+
+	// Forget deletes channel's ids whose until is not after now.
+	Forget(ctx context.Context, channel string, now time.Time) error
 }
 
 // sweepFloor is the size below which a guard never sweeps: small enough that
@@ -477,38 +560,96 @@ type Guard struct {
 // not sweep on every request.
 const sweepFloor = 1024
 
-// NewGuard is an empty guard.
+// NewGuard is an empty guard that keeps nothing past a restart, for a channel
+// none of whose requests writes ([Request.Writes]): it refuses a write as
+// [Unrecorded], so a channel wired without its file runs no write at all.
 func NewGuard() *Guard {
 	return &Guard{seen: map[string]time.Time{}, sweepAt: sweepFloor}
 }
 
+// KeptGuard is this channel's guard over the node's own file: every write it
+// takes is kept there until its window ends, and one the file holds already,
+// from before a restart, is a replay. It starts by deleting the ids past their
+// window, judged on now, and refuses to start where the file refuses that: a
+// file it cannot write is one it could keep no write in.
+func (c *Channel[Q, R]) KeptGuard(ctx context.Context, file Ledger, now time.Time) (*Guard, error) {
+	if file == nil {
+		return nil, fmt.Errorf("signedask: %s: a guard that keeps its writes needs the node's file", c.name)
+	}
+	if err := file.Forget(ctx, c.name, now); err != nil {
+		return nil, fmt.Errorf("signedask: %s: clear the requests this node took past their window "+
+			"(the node file's signed_request_taken table): %w", c.name, err)
+	}
+	return &Guard{seen: map[string]time.Time{}, sweepAt: sweepFloor, file: file, channel: c.name}, nil
+}
+
 // take records one request's id until its deadline plus apart — the last
 // instant its channel admits it, by this node's clock — answering why it may
-// not be taken now: empty where it was taken. The id is remembered exactly as
-// long as it is admitted, never only to the deadline, or a replay arriving
-// after a sweep forgot it but inside the allowance would be taken again.
-func (g *Guard) take(id string, deadline time.Time, apart time.Duration, now time.Time) string {
+// not be taken now, and as what: empty where it was taken. The id is
+// remembered exactly as long as it is admitted, never only to the deadline, or
+// a replay arriving after a sweep forgot it but inside the allowance would be
+// taken again. A write's id is held in memory first, so a concurrent replay
+// meets it, and committed to the file before it counts as taken.
+func (g *Guard) take(ctx context.Context, id string, deadline time.Time, apart time.Duration,
+	now time.Time, writes bool) (Disposition, string) {
+
 	until := deadline.Add(apart)
 	switch {
 	case g == nil:
 		// A WIRING FAULT, answered as refusals rather than a panic in a
 		// handler that serves the fleet: without a guard a replay could
 		// not be told from the request it repeats.
-		return "this node keeps no record of the requests it has taken, so it could " +
+		return Stale, "this node keeps no record of the requests it has taken, so it could " +
 			"not tell a replay from the request it repeats"
 	case id == "":
-		return "the request names no id, so a replay of it could not be told from it"
+		return Stale, "the request names no id, so a replay of it could not be told from it"
 	case deadline.IsZero():
-		return "the request names no deadline, so nothing bounds how long its id " +
+		return Stale, "the request names no deadline, so nothing bounds how long its id " +
 			"would have to be remembered"
 	case !now.Before(until):
 		allowed := ""
 		if apart > 0 {
 			allowed = fmt.Sprintf(", and the %v this channel allows two nodes' clocks to stand apart,", apart)
 		}
-		return fmt.Sprintf("the request's deadline %s%s had passed when it arrived — "+
+		return Stale, fmt.Sprintf("the request's deadline %s%s had passed when it arrived — "+
 			"nobody is waiting for its answer", deadline.UTC().Format(time.RFC3339Nano), allowed)
+	case writes && g.file == nil:
+		return Unrecorded, "this node keeps the ids it takes on this channel in memory only, " +
+			"and a write's id must outlive a restart; nothing ran"
 	}
+	swept, why := g.hold(id, until, now)
+	if why != "" {
+		return Stale, why
+	}
+	if swept && g.file != nil {
+		// A FAILED SWEEP LEAVES ROWS THE NEXT ONE OR THE NEXT BOOT DELETES,
+		// so it refuses nothing.
+		if err := g.file.Forget(ctx, g.channel, now); err != nil {
+			log.WarnContext(ctx, "signed_requests_not_forgotten", "channel", g.channel,
+				"error", err.Error(), "detail", "the next sweep or boot deletes them")
+		}
+	}
+	if !writes {
+		return "", ""
+	}
+	fresh, err := g.file.Keep(ctx, g.channel, id, until)
+	switch {
+	case err != nil:
+		g.release(id)
+		log.ErrorContext(ctx, "signed_request_unrecorded", "channel", g.channel, "request", id,
+			"error", err.Error(), "detail", "the node file did not keep the id of a write, so "+
+				"it ran nothing here; the asker may ask another node")
+		return Unrecorded, fmt.Sprintf("this node could not keep request %s in its own file (%v), "+
+			"so it ran nothing", id, err)
+	case !fresh:
+		return Stale, fmt.Sprintf("request %s was taken already, so this is a replay of it", id)
+	}
+	return "", ""
+}
+
+// hold enters id in memory until until, sweeping first where the guard has
+// grown to its sweep size; swept says it did.
+func (g *Guard) hold(id string, until, now time.Time) (swept bool, why string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.seen) >= g.sweepAt {
@@ -518,10 +659,19 @@ func (g *Guard) take(id string, deadline time.Time, apart time.Duration, now tim
 			}
 		}
 		g.sweepAt = max(2*len(g.seen), sweepFloor)
+		swept = true
 	}
 	if _, held := g.seen[id]; held {
-		return fmt.Sprintf("request %s was taken already, so this is a replay of it", id)
+		return swept, fmt.Sprintf("request %s was taken already, so this is a replay of it", id)
 	}
 	g.seen[id] = until
-	return ""
+	return swept, ""
+}
+
+// release forgets id, a write the file would not keep: it ran nothing, so it
+// may be taken again.
+func (g *Guard) release(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.seen, id)
 }

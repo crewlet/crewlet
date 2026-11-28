@@ -290,6 +290,10 @@ type BoxReadRequest struct {
 // binding, never the length of the read ([BoxReadRequest.BudgetMS]).
 func (r BoxReadRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
+// Writes is false: the host reads back what the run's row still licenses it
+// to, and pauses the box as the collection does (internal/signedask).
+func (r BoxReadRequest) Writes() bool { return false }
+
 // AnswerBudget is how long the host may read for a request that reached it
 // waited ago, both on the host's clock: what is left of [BoxReadAnswerShare] of
 // the carried wait, counted from arrival, so the read ends by arrival plus that

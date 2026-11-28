@@ -1,6 +1,7 @@
 package estate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -16,11 +17,11 @@ import (
 // is [unservedUnauthenticated], bound to no request, logged at error; KEY
 // UNKNOWN the same but bound to the asker's id, so the router asks a node with
 // the key; UNDECODABLE is an error (a build that disagrees, not an outsider);
-// STALE is [unservedStale], bound to the request it repeats. Each node keeps
-// the ids it took in its own [signedask.Guard]. The domains `estate.request` and
-// `estate.reply` ([channelName]) keep other channels' envelopes and state-log
-// records from verifying here. Custody batches are event envelopes, unsigned:
-// observations, not an instruction run as somebody (the event spine's call).
+// STALE is [unservedStale], bound to the request it repeats; UNRECORDED is
+// [unservedUnrecorded]. The domains `estate.request` and `estate.reply`
+// ([channelName]) keep other channels' envelopes and state-log records from
+// verifying here. Custody batches are event envelopes, unsigned: observations,
+// not an instruction run as somebody (the event spine's call).
 
 // channelName is the estate's channel, and so the stem of its two key domains.
 const channelName = "estate"
@@ -66,8 +67,15 @@ func (e *Envelopes) sealRequest(req request) ([]byte, error) {
 
 // admit opens one request a data node was sent and decides what it may do with
 // it — see [signedask.Channel.Admit].
-func (e *Envelopes) admit(sealed []byte, seen *signedask.Guard, now time.Time) signedask.Admission[request] {
-	return e.channel.Admit(sealed, seen, now)
+func (e *Envelopes) admit(ctx context.Context, sealed []byte, seen *signedask.Guard,
+	now time.Time) signedask.Admission[request] {
+	return e.channel.Admit(ctx, sealed, seen, now)
+}
+
+// keptGuard is a serving node's guard over its own file
+// ([signedask.Channel.KeptGuard]).
+func (e *Envelopes) keptGuard(ctx context.Context, file signedask.Ledger, now time.Time) (*signedask.Guard, error) {
+	return e.channel.KeptGuard(ctx, file, now)
 }
 
 // sealReply encodes and signs one reply. It never fails: every field of a reply

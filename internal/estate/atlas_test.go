@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -63,7 +64,7 @@ func TestTheAtlasFacadesAskExactlyTheAtlasOperations(t *testing.T) {
 				t.Errorf("%s.%s asked %d operations, want one", v.Type().Name(), method, len(sent))
 				continue
 			}
-			got[opened(sent[0].payload).Op] = true
+			got[opened(t.Context(), sent[0].payload).Op] = true
 		}
 		want := map[string]bool{}
 		for name, spec := range registry {
@@ -185,7 +186,7 @@ func TestAPersonsAtlasWriteFromANodeWithoutDataCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	desk := &atlasDesk{}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
@@ -250,7 +251,7 @@ func TestAnAgentsAtlasRecordFromANodeWithoutDataCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	desk := &atlasDesk{}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
@@ -294,7 +295,7 @@ func TestTheAtlasLogReadFromANodeWithoutDataCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	desk := &atlasDesk{}
-	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-d", Local: desk, Envelopes: fleetEnvelopes,
 	})
 	if err != nil {

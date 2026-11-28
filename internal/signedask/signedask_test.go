@@ -18,9 +18,12 @@ type ask struct {
 	ID       string    `json:"id"`
 	Deadline time.Time `json:"deadline"`
 	Do       string    `json:"do"`
+	Write    bool      `json:"write,omitempty"`
 }
 
 func (a ask) Binding() (string, time.Time) { return a.ID, a.Deadline }
+
+func (a ask) Writes() bool { return a.Write }
 
 type answer struct {
 	Request string `json:"request,omitempty"`
@@ -64,16 +67,16 @@ func TestARequestTheFleetSignedIsAdmittedOnce(t *testing.T) {
 	guard := NewGuard()
 	sent := sealed(t, c, removal)
 
-	got := c.Admit(sent, guard, instant)
+	got := c.Admit(t.Context(), sent, guard, instant)
 	if got.Disposition != Admitted || got.Request != removal || got.ID != removal.ID || got.Why != "" {
 		t.Fatalf("a request the fleet signed = %+v, want it admitted as sent", got)
 	}
-	again := c.Admit(sent, guard, instant)
+	again := c.Admit(t.Context(), sent, guard, instant)
 	if again.Disposition != Stale || again.ID != removal.ID || !strings.Contains(again.Why, "replay") {
 		t.Fatalf("the same request again = %+v, want it refused as a replay", again)
 	}
 	// A SCATTER HANDS ONE REQUEST TO EVERY NODE, and each takes it once.
-	if other := c.Admit(sent, NewGuard(), instant); other.Disposition != Admitted {
+	if other := c.Admit(t.Context(), sent, NewGuard(), instant); other.Disposition != Admitted {
 		t.Fatalf("another node's first sight of the request = %+v, want it admitted", other)
 	}
 }
@@ -100,7 +103,7 @@ func TestARequestTheFleetDidNotSignIsBelievedInNothing(t *testing.T) {
 		"signed under somebody else's key": outsider,
 		"altered after it was signed":      altered,
 	} {
-		got := c.Admit(sent, NewGuard(), instant)
+		got := c.Admit(t.Context(), sent, NewGuard(), instant)
 		if got.Disposition != Tampered || got.ID != "" || got.Request != (ask{}) || got.Why == "" {
 			t.Errorf("%s = %+v, want it tampered with nothing in it believed", name, got)
 		}
@@ -118,7 +121,7 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldNamesItsIDUntrusted(t *testing.T) {
 	}}
 	ahead := channel(t, "test.channel", rotated)
 	behind := channel(t, "test.channel", fleetRing)
-	got := behind.Admit(sealed(t, ahead, removal), NewGuard(), instant)
+	got := behind.Admit(t.Context(), sealed(t, ahead, removal), NewGuard(), instant)
 	if got.Disposition != KeyUnknown || got.ID != removal.ID || got.Request != removal {
 		t.Fatalf("a request under an unheld key = %+v, want it refused naming its id", got)
 	}
@@ -144,7 +147,7 @@ func TestARequestNobodyIsWaitingForIsStale(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := c.Admit(c.requests.Seal(raw), NewGuard(), instant)
+		got := c.Admit(t.Context(), c.requests.Seal(raw), NewGuard(), instant)
 		if got.Disposition != Stale || got.ID != req.ID || got.Why == "" {
 			t.Errorf("%s = %+v, want it stale and bound to %q", name, got, req.ID)
 		}
@@ -161,7 +164,7 @@ func TestARequestNobodyIsWaitingForIsStale(t *testing.T) {
 func TestARequestThisBuildCannotReadIsUndecodable(t *testing.T) {
 	t.Parallel()
 	c := channel(t, "test.channel", fleetRing)
-	got := c.Admit(c.requests.Seal([]byte(`{"id":7}`)), NewGuard(), instant)
+	got := c.Admit(t.Context(), c.requests.Seal([]byte(`{"id":7}`)), NewGuard(), instant)
 	if got.Disposition != Undecodable || got.ID != "" || got.Why == "" {
 		t.Fatalf("an undecodable request = %+v", got)
 	}
@@ -172,7 +175,7 @@ func TestARequestThisBuildCannotReadIsUndecodable(t *testing.T) {
 func TestANodeWithoutAGuardTakesNothing(t *testing.T) {
 	t.Parallel()
 	c := channel(t, "test.channel", fleetRing)
-	if got := c.Admit(sealed(t, c, removal), nil, instant); got.Disposition != Stale {
+	if got := c.Admit(t.Context(), sealed(t, c, removal), nil, instant); got.Disposition != Stale {
 		t.Fatalf("a request admitted with no guard = %+v", got)
 	}
 }
@@ -246,7 +249,7 @@ func TestEveryChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		"another channel's request": sealed(t, other, removal),
 		"a state-log record":        record.Seal([]byte(`{"id":"r-1"}`)),
 	} {
-		if got := c.Admit(sent, NewGuard(), instant); got.Disposition != Tampered {
+		if got := c.Admit(t.Context(), sent, NewGuard(), instant); got.Disposition != Tampered {
 			t.Errorf("%s admitted as a request: %+v", name, got)
 		}
 	}
@@ -276,17 +279,17 @@ func TestTheGuardForgetsAnIDOnlyOnceItsChannelWouldRefuseIt(t *testing.T) {
 	t.Parallel()
 	g := NewGuard()
 	now := instant
-	if g.take("r-1", now.Add(time.Minute), 0, now) != "" || g.take("r-1", now.Add(time.Minute), 0, now) == "" {
+	if took(t, g, "r-1", now.Add(time.Minute), 0, now) != "" || took(t, g, "r-1", now.Add(time.Minute), 0, now) == "" {
 		t.Fatal("an id was not taken once and refused after")
 	}
 	// SHORT-LIVED REQUESTS fill the guard to its floor; the next admission
 	// after their deadlines sweeps them out and keeps what is in flight.
 	for i := range sweepFloor - 2 {
-		g.take("filler-"+strconv.Itoa(i), now.Add(time.Second), 0, now)
+		took(t, g, "filler-"+strconv.Itoa(i), now.Add(time.Second), 0, now)
 	}
 	later := now.Add(30 * time.Second)
-	g.take("r-2", later.Add(time.Minute), 0, later)
-	g.take("r-3", later.Add(time.Minute), 0, later)
+	took(t, g, "r-2", later.Add(time.Minute), 0, later)
+	took(t, g, "r-3", later.Add(time.Minute), 0, later)
 	g.mu.Lock()
 	held := len(g.seen)
 	_, stillHeld := g.seen["r-1"]
@@ -295,7 +298,7 @@ func TestTheGuardForgetsAnIDOnlyOnceItsChannelWouldRefuseIt(t *testing.T) {
 		t.Fatalf("after a sweep the guard holds %d ids (r-1 held: %v), want the three still "+
 			"in flight", held, stillHeld)
 	}
-	if g.take("r-1", now.Add(time.Minute), 0, later) == "" {
+	if took(t, g, "r-1", now.Add(time.Minute), 0, later) == "" {
 		t.Fatal("an id still in flight was forgotten by the sweep")
 	}
 }
@@ -317,16 +320,16 @@ func TestARequestIsTakenOnceUntilItsDeadlinePlusItsChannelsAllowance(t *testing.
 	guard := NewGuard()
 	sent := sealed(t, c, removal)
 	last := removal.Deadline.Add(apart - time.Nanosecond)
-	if got := c.Admit(sent, guard, last); got.Disposition != Admitted {
+	if got := c.Admit(t.Context(), sent, guard, last); got.Disposition != Admitted {
 		t.Fatalf("a request arriving a nanosecond inside its deadline plus the channel's %v = %+v, "+
 			"want it admitted", apart, got)
 	}
-	if again := c.Admit(sent, guard, last); again.Disposition != Stale ||
+	if again := c.Admit(t.Context(), sent, guard, last); again.Disposition != Stale ||
 		!strings.Contains(again.Why, "taken already") {
 		t.Fatalf("the same request again at that instant = %+v, want it refused as taken already", again)
 	}
 	fresh := ask{ID: "r-fresh", Deadline: removal.Deadline, Do: removal.Do}
-	late := c.Admit(sealed(t, c, fresh), guard, removal.Deadline.Add(apart))
+	late := c.Admit(t.Context(), sealed(t, c, fresh), guard, removal.Deadline.Add(apart))
 	if late.Disposition != Stale || !strings.Contains(late.Why, "had passed") ||
 		!strings.Contains(late.Why, apart.String()) {
 		t.Fatalf("a fresh request arriving at its deadline plus the channel's %v = %+v, want it "+
@@ -339,21 +342,21 @@ func TestARequestIsTakenOnceUntilItsDeadlinePlusItsChannelsAllowance(t *testing.
 	swept := NewGuard()
 	long := ask{ID: "r-long", Deadline: instant.Add(2 * time.Hour), Do: removal.Do}
 	longSent := sealed(t, c, long)
-	if got := c.Admit(longSent, swept, instant); got.Disposition != Admitted {
+	if got := c.Admit(t.Context(), longSent, swept, instant); got.Disposition != Admitted {
 		t.Fatalf("the long request = %+v, want it admitted", got)
 	}
 	for i := range sweepFloor - 1 {
 		short := ask{ID: "short-" + strconv.Itoa(i), Deadline: instant.Add(time.Second), Do: removal.Do}
-		if got := c.Admit(sealed(t, c, short), swept, instant); got.Disposition != Admitted {
+		if got := c.Admit(t.Context(), sealed(t, c, short), swept, instant); got.Disposition != Admitted {
 			t.Fatalf("short request %d = %+v, want it admitted", i, got)
 		}
 	}
 	between := long.Deadline.Add(apart / 2)
 	sweeper := ask{ID: "r-sweeper", Deadline: between.Add(time.Minute), Do: removal.Do}
-	if got := c.Admit(sealed(t, c, sweeper), swept, between); got.Disposition != Admitted {
+	if got := c.Admit(t.Context(), sealed(t, c, sweeper), swept, between); got.Disposition != Admitted {
 		t.Fatalf("the request that sweeps = %+v, want it admitted", got)
 	}
-	if replay := c.Admit(longSent, swept, between); replay.Disposition != Stale ||
+	if replay := c.Admit(t.Context(), longSent, swept, between); replay.Disposition != Stale ||
 		!strings.Contains(replay.Why, "taken already") {
 		t.Fatalf("a replay of the long request after a sweep past its deadline, inside its "+
 			"allowance = %+v, want it refused as taken already", replay)

@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -646,7 +647,7 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	for _, name := range names {
 		node := &fakeNode{name: name, units: chartOf(name)}
 		f.nodes[name] = node
-		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{
+		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{Taken: signedasktest.NewLedger(),
 			Self: name, Local: node, Seams: node.seams(), Envelopes: fleetEnvelopes,
 		})
 		if err != nil {
@@ -723,7 +724,7 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 	return s.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		// Opened as a fleet member reads it: the zero request where it is
 		// not the fleet's.
-		req := opened(raw)
+		req := opened(ctx, raw)
 		s.node.mu.Lock()
 		s.node.requests++
 		if req.AcceptLagging {

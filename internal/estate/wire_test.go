@@ -703,7 +703,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		t.Errorf("admission asked %q, want the data node's own subject %q",
 			sent[0].subject, Subject("data-a"))
 	}
-	admitted := fleetEnvelopes.admit(sent[0].payload, signedask.NewGuard(), time.Now())
+	admitted := fleetEnvelopes.admit(t.Context(), sent[0].payload, signedask.NewGuard(), time.Now())
 	if admitted.Disposition != signedask.Admitted {
 		t.Fatalf("the ping does not open as a request the fleet signed: %s (%s)",
 			admitted.Disposition, admitted.Why)
@@ -751,11 +751,11 @@ type sentRequest struct {
 	payload []byte
 }
 
-func (a *recordingAsker) Ask(_ context.Context, subject string, payload []byte, _ int) ([][]byte, error) {
+func (a *recordingAsker) Ask(ctx context.Context, subject string, payload []byte, _ int) ([][]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sent = append(a.sent, sentRequest{subject: subject, payload: slices.Clone(payload)})
-	req := opened(payload)
+	req := opened(ctx, payload)
 	if req.ID == "" {
 		return nil, errors.New("a request that does not open as the fleet's")
 	}

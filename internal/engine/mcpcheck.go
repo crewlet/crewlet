@@ -147,6 +147,12 @@ type mcpCheckAsk struct {
 
 func (a mcpCheckAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
 
+// Writes is false (internal/signedask): a test starts the server, lists its
+// tools and stops it, so a replay repeats a probe a person asked for and
+// changes no state. And every node answers one, data or not, and a node
+// without data has no durable file to keep an id in (store.ErrScratchLedger).
+func (a mcpCheckAsk) Writes() bool { return false }
+
 // mcpValueAsk is a value under test as it crosses the broker, sealed.
 type mcpValueAsk struct {
 	Key      string `json:"key"`
@@ -490,7 +496,7 @@ func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error)
 	// wait for a slot (queue.Arrived), on the runtime clock the test is
 	// counted on; the channel's own clock admits it.
 	arrived := queue.Arrived(ctx)
-	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, e.mcpChecks.now())
+	admitted := e.mcpChecks.wire.Admit(ctx, raw, e.mcpChecks.taken, e.mcpChecks.now())
 	switch admitted.Disposition {
 	case signedask.Admitted:
 	case signedask.Tampered:

@@ -377,7 +377,7 @@ func (d *steerDesk) probe(turnID string) (steer.Status, steerSeat, error) {
 // [steer.Channel] wire). Anything else is answered by nobody, like a turn not
 // on this node, except a key this node does not hold ([steerDesk.unverified]).
 func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
-	admitted := d.wire.Admit(raw, d.taken, d.now())
+	admitted := d.wire.Admit(ctx, raw, d.taken, d.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
 		// Logged at ERROR: no node will ever take it, so its sender reached
@@ -389,7 +389,7 @@ func (d *steerDesk) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		return d.unverified(ctx, admitted)
 	case signedask.Undecodable:
 		return nil, fmt.Errorf("engine: a steer request this build cannot read: %s", admitted.Why)
-	case signedask.Stale:
+	case signedask.Stale, signedask.Unrecorded:
 		log.WarnContext(ctx, "steer_request_refused", "disposition", string(admitted.Disposition),
 			"turn_id", admitted.Request.TurnID, "detail", admitted.Why)
 		return nil, fmt.Errorf("engine: a steer request not to be taken now: %s", admitted.Why)

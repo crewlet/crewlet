@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 )
 
 // present is the fleet's roster: the nodes named are present.
@@ -85,7 +86,7 @@ func fleetAsking(t *testing.T, budget time.Duration, a, b evals.RigOptions) (*as
 		}
 		f, err := live.NewFleet(live.FleetOptions{Node: node, Broker: q, Roster: roster,
 			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops, AskBudget: budget,
-			Answers: queue.NewAnswerBudget(nil)})
+			Taken: signedasktest.NewLedger(), Answers: queue.NewAnswerBudget(nil)})
 		if err != nil {
 			t.Fatal(err)
 		}

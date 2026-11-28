@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -96,7 +97,7 @@ func statelessWithDirectory(t *testing.T, served *directoryCopy) *Engine {
 		return q
 	}
 	envelopes := routerEnvelopes(t)
-	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{
+	stop, err := estate.Serve(t.Context(), started(), estate.ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: "data-1", Local: served, Envelopes: envelopes,
 	})
 	if err != nil {

@@ -110,7 +110,7 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 	// wait for a slot (queue.Arrived), on the runtime clock its reads are
 	// counted on; the node's own clock admits it.
 	arrived := queue.Arrived(ctx)
-	adm := s.wire.Admit(sealed, s.taken, s.now())
+	adm := s.wire.Admit(ctx, sealed, s.taken, s.now())
 	switch adm.Disposition {
 	case signedask.Admitted:
 	case signedask.KeyUnknown:

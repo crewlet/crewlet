@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -133,7 +134,7 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 		{"a Gitlet node", gitHalf{node: &fakeGit{name: "data.a"}}, withGit},
 	} {
 		srv := newLaneServer(t, "", nil)
-		stop, err := Serve(t.Context(), srv, ServerOptions{Self: "data.a",
+		stop, err := Serve(t.Context(), srv, ServerOptions{Taken: signedasktest.NewLedger(), Self: "data.a",
 			Local: &fakeNode{name: "data.a"}, Git: tc.git, Envelopes: fleetEnvelopes})
 		if err != nil {
 			t.Fatalf("%s: serve: %v", tc.name, err)
@@ -305,7 +306,7 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("this broker registers no answerer there")
 	srv := newLaneServer(t, ProposalSubject("data-a"), refused)
-	if _, err := Serve(t.Context(), srv, ServerOptions{Self: "data-a",
+	if _, err := Serve(t.Context(), srv, ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a",
 		Local: &fakeNode{name: "data-a"}, Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
 		t.Fatalf("serve with a lane the broker refuses = %v, want the refusal", err)
 	}
@@ -314,7 +315,7 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 			"registered", got)
 	}
 	gitletNode := newLaneServer(t, laneGitReads.subject("data-a"), refused)
-	if _, err := Serve(t.Context(), gitletNode, ServerOptions{Self: "data-a",
+	if _, err := Serve(t.Context(), gitletNode, ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a",
 		Local: &fakeNode{name: "data-a"}, Git: gitHalf{node: &fakeGit{name: "data-a"}},
 		Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
 		t.Fatalf("serve with a git lane the broker refuses = %v, want the refusal", err)
@@ -324,7 +325,7 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 			"shared lanes it had registered", got)
 	}
 	writesRefused := newLaneServer(t, laneGitWrites.subject("data-a"), refused)
-	if _, err := Serve(t.Context(), writesRefused, ServerOptions{Self: "data-a",
+	if _, err := Serve(t.Context(), writesRefused, ServerOptions{Taken: signedasktest.NewLedger(), Self: "data-a",
 		Local: &fakeNode{name: "data-a"}, Git: gitHalf{node: &fakeGit{name: "data-a"}},
 		Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
 		t.Fatalf("serve with a git writes' lane the broker refuses = %v, want the refusal", err)

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/signedask/signedasktest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -21,7 +22,7 @@ import (
 func serveAhead(t *testing.T, f *fleet, node *fakeNode, git LocalGit, ahead time.Duration) {
 	t.Helper()
 	f.nodes[node.name] = node
-	stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{
+	stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, ServerOptions{Taken: signedasktest.NewLedger(),
 		Self: node.name, Local: node, Git: git, Seams: node.seams(), Envelopes: fleetEnvelopes,
 		Now: func() time.Time { return time.Now().Add(ahead) },
 	})
