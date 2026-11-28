@@ -227,6 +227,11 @@ type chatRail struct {
 	// present, a room a newer peer wrote included.
 	Unreadable int `json:"unreadable,omitempty"`
 
+	// Waiting and WaitingCapped are what every badge counts, place by place
+	// ([chatlet.ChannelListing.Waiting]); empty when ReadState is false.
+	Waiting       []chatlet.Waiting `json:"waiting"`
+	WaitingCapped bool              `json:"waiting_capped"`
+
 	// DefaultPrivate is what a room created WITHOUT a stated visibility
 	// will be, from `chat.chatlet.default_channel_private` — on the rail
 	// because the create form opens out of it, and THE SCREEN NEEDS IT TO
@@ -280,7 +285,7 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 			"without `unread`", ErrUnavailable)
 	}
 	listing, err := s.Chat.Channels(ctx, who, chatlet.ChannelsQuery{
-		Cursors: state.Cursors,
+		Marks: readerMarks(state, measured), Waiting: true,
 		// THE ROOMS THE PERSON STARRED are kept in the list they work out
 		// of whether or not they are in them, as long as they may read
 		// them: a star on a team's room is how somebody outside the team
@@ -313,14 +318,19 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 			// zeroed rather than carried, and a client ignoring
 			// `read_state` under-badges instead of telling every person
 			// they are a hundred behind everywhere.
-			summary.Unread, summary.UnreadCapped, summary.Mentions = 0, false, 0
+			summary.Unread, summary.UnreadCapped = 0, false
 		}
 		rooms = append(rooms, chatRoom{ChannelSummary: summary,
 			Muted: muted[summary.Channel.ID]})
 	}
+	waiting := listing.Waiting
+	if waiting == nil {
+		waiting = []chatlet.Waiting{}
+	}
 	out := chatRail{
 		Served: listing.Served, Channels: rooms,
 		Truncated: listing.Truncated, Unreadable: listing.Unreadable,
+		Waiting: waiting, WaitingCapped: listing.WaitingCapped,
 		ReadState: measured, DefaultPrivate: s.chatDefaultPrivate(),
 	}
 	if measured {
@@ -336,7 +346,7 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 // Rooms, membership and messages are the state log's, read through the estate
 // router, so every answer carries the position it was true as of. Read cursors,
 // mutes and do-not-disturb are NOT on that log: they live in coordination and
-// reach the rail as a value ([chatlet.ChannelsQuery.Cursors]).
+// reach the rail as a value ([chatlet.ChannelsQuery.Marks]).
 //
 // A FAILURE HERE DOES NOT REFUSE THE RAIL. The rooms, previews and order are
 // the log's and still true; only the badges are UNKNOWN (`read_state`), a third

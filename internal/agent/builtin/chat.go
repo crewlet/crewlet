@@ -156,7 +156,7 @@ type ChatDeps struct {
 	Mentions MentionResolver
 
 	// ReadState is this viewer's whole read state: cursors per room
-	// ([coord.ChatReadState.Cursors], what [chatlet.ChannelsQuery.Cursors]
+	// ([coord.ChatReadState.Cursors], what [chatlet.ChannelsQuery.Marks]
 	// counts above), muted rooms and do-not-disturb. Whole, because a
 	// person's assistant reads the dashboard's rail through `list_channels`,
 	// and a muted room handed over as unread is a backlog they silenced.
@@ -1423,7 +1423,9 @@ func (t *listChannels) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"handle", actor.Name(), "error", readErr.Error())
 		} else {
 			state, counted = read, true
-			q.Cursors = state.Cursors
+			// The cursors alone: this list counts unread room posts and
+			// asks for nothing waiting ([chatlet.ChannelsQuery.Waiting]).
+			q.Marks = chatlet.ReaderMarks{Known: true, Cursors: state.Cursors}
 		}
 	}
 	muted := make(map[string]bool, len(state.Muted))

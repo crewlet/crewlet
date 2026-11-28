@@ -30,7 +30,7 @@ import (
 //
 // Read state (where somebody has read to, marked threads, saves) lives in
 // coordination (internal/coord's chat read record) and arrives as a value, for
-// [ChannelsQuery.Cursors]'s reason: no fleet round trip inside every read and
+// [ChannelsQuery.Marks]' reason: no fleet round trip inside every read and
 // no second store here. A record that could not be read is said ([Known])
 // rather than taken for an empty one, which would call everything unread.
 type ReaderMarks struct {
@@ -48,6 +48,9 @@ type ReaderMarks struct {
 	// named in is followed.
 	Following  []ThreadRef
 	Unfollowed []ThreadRef
+
+	// Muted are the rooms the reader silenced: nothing in them waits.
+	Muted map[string]bool
 }
 
 // ThreadRef names one thread by its room and its root message.
@@ -56,10 +59,10 @@ type ThreadRef struct {
 	RootID    string
 }
 
-// unreadAbove reports whether a row at position, in channel and thread, is
-// above both of the reader's places for it.
-func (m ReaderMarks) unreadAbove(channel, thread string, position int64) bool {
-	if !m.Known {
+// waits reports whether a row at position, in channel and thread, is above
+// both of the reader's places for it, in a room they have not muted.
+func (m ReaderMarks) waits(channel, thread string, position int64) bool {
+	if !m.Known || m.Muted[channel] {
 		return false
 	}
 	read := m.Cursors[channel]
@@ -149,11 +152,13 @@ type ActivityItem struct {
 	// was made: the broker's instant, which is the feed's order.
 	At time.Time `json:"at"`
 
-	// Unread marks a mention or a reply above the reader's places for it.
+	// Unread marks a mention or a reply above the reader's places for it,
+	// in a room they have not muted: one that waits on them ([waiting]).
 	Unread bool `json:"unread,omitempty"`
 
-	// ReadThrough is the PACKED position that, sent as the room's cursor,
-	// marks this row read. Zero (absent) on a reaction.
+	// ReadThrough is the PACKED position that marks this row read, sent as
+	// its thread's place for a reply and its room's otherwise. Zero (absent)
+	// on a reaction.
 	ReadThrough int64 `json:"read_through,omitempty"`
 }
 
@@ -314,37 +319,15 @@ func (r *Reader) Activity(ctx context.Context, viewer string, q ActivityQuery,
 	return out, nil
 }
 
-// activityCounts counts the unread mentions and replies over the newest
-// [UnreadLimit] of each.
+// activityCounts counts what waits on the reader in Activity ([waiting]).
 func activityCounts(ctx context.Context, tx *sql.Tx, who string,
 	marks ReaderMarks) (ActivityCounts, error) {
 
-	var counts ActivityCounts
-	if !marks.Known {
-		return counts, nil
+	t, err := waiting(ctx, tx, who, marks, nil)
+	if err != nil {
+		return ActivityCounts{}, err
 	}
-	for _, kind := range []ActivityKind{ActivityMention, ActivityReply} {
-		windows, err := activitySources(ctx, tx, who, kind, marks, nil, UnreadLimit)
-		if err != nil {
-			return ActivityCounts{}, err
-		}
-		rows, _ := mergeActivity(windows, UnreadLimit)
-		n := 0
-		for _, row := range rows {
-			if row.item.Unread {
-				n++
-			}
-		}
-		if n >= UnreadLimit {
-			counts.Capped = true
-		}
-		if kind == ActivityMention {
-			counts.Mention = n
-		} else {
-			counts.Reply = n
-		}
-	}
-	return counts, nil
+	return ActivityCounts{Mention: t.mentions, Reply: t.replies, Capped: t.capped}, nil
 }
 
 // activitySources reads each source the kind asks for, newest first, each into
@@ -704,7 +687,7 @@ func scanActivityMessages(rows *sql.Rows, who string, kind ActivityKind,
 		item.ChannelName, item.ChannelKind = name, Kind(roomKind)
 		item.ActorKind, item.Excerpt = AuthorKind(author), Excerpt(body)
 		item.At = store.DecodeTime(at)
-		item.Unread = marks.unreadAbove(item.ChannelID, item.ThreadRoot, row.position)
+		item.Unread = marks.waits(item.ChannelID, item.ThreadRoot, row.position)
 		item.ReadThrough = row.position
 		row.order.at = at
 		out = append(out, row)

@@ -805,7 +805,7 @@ func (h *readHarness) readRail(reader *chatlet.Reader,
 
 	h.t.Helper()
 	listing, err := reader.Channels(h.t.Context(), "ada",
-		chatlet.ChannelsQuery{Cursors: cursors}, h.session())
+		chatlet.ChannelsQuery{Marks: chatlet.ReaderMarks{Cursors: cursors}}, h.session())
 	if err != nil {
 		h.t.Fatalf("ada's channel list: %v", err)
 	}
@@ -956,8 +956,9 @@ func TestARailAskedForFewerRoomsIsTheTopOfIt(t *testing.T) {
 			"active and the rest said to be left out", ids(top), top.Truncated)
 	}
 	// ADA HAS READ room-b AND room-c TO THE END, and not room-a's last message.
-	unread := ask(chatlet.ChannelsQuery{Unread: true, Cursors: map[string]int64{
-		"room-a": read.Packed(), "room-b": read.Packed(), "room-c": read.Packed()}})
+	unread := ask(chatlet.ChannelsQuery{Unread: true, Marks: chatlet.ReaderMarks{
+		Cursors: map[string]int64{"room-a": read.Packed(), "room-b": read.Packed(),
+			"room-c": read.Packed()}}})
 	if !slices.Equal(ids(unread), []string{"room-a"}) || unread.Truncated {
 		t.Errorf("ada's rooms with something unread are %v (truncated=%t), want room-a "+
 			"alone", ids(unread), unread.Truncated)

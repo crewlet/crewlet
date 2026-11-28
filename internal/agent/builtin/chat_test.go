@@ -154,7 +154,7 @@ func (f *fakeChat) Channels(_ context.Context, viewer string, q chatlet.Channels
 		Served: chatlet.Served{Complete: true},
 		Channels: []chatlet.ChannelSummary{{
 			Channel: f.room,
-			Unread:  int(max(chatRoomMessages-q.Cursors[chatRoomID], 0)),
+			Unread:  int(max(chatRoomMessages-q.Marks.Cursors[chatRoomID], 0)),
 			Last:    f.last,
 		}},
 	}, nil
@@ -1441,7 +1441,7 @@ func TestAPersonsUnreadCountsAreTakenAgainstTheirOwnCursors(t *testing.T) {
 		t.Errorf("a person who read through 4 of %d messages is told %v are new, "+
 			"want 3: %v", chatRoomMessages, rows[0]["unread"], rows[0])
 	}
-	if got := f.listed[len(f.listed)-1].Cursors; got[chatRoomID] != 4 {
+	if got := f.listed[len(f.listed)-1].Marks.Cursors; got[chatRoomID] != 4 {
 		t.Errorf("the listing was counted against cursors %v, want the person's", got)
 	}
 	if !slices.Equal(*asked, []string{"jane"}) {
